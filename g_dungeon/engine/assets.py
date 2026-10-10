@@ -193,7 +193,12 @@ class AssetManager:
         "book_fire": ("books.png", 3, 0),
         "chest_gold": ("chests.png", 4, 0),
         "chest_royal": ("chests.png", 4, 2),
+        "inventory": ("chests.png", 4, 0),
+        "chest_wood": ("chests.png", 1, 0),
+        "book_arcane": ("books.png", 4, 0),
+        "book_gold": ("books.png", 6, 0),
         "crystal_fragment": ("potions.png", 0, 3),
+        "boots": ("armours.png", 1, 6),
     }
 
     def get_rpg_icon(self, name: str, size: Tuple[int, int] = (24, 24)) -> Optional[pygame.Surface]:
@@ -220,6 +225,26 @@ class AssetManager:
         except Exception:
             return None
 
+    def get_item_icon(self, item_name: str, size: Tuple[int, int] = (24, 24)) -> Optional[pygame.Surface]:
+        """Mengembalikan icon RPG Pygame yang sesuai untuk nama item tertentu."""
+        name_lower = str(item_name).lower().strip()
+        if "fire" in name_lower:
+            return self.get_rpg_icon("book_fire", size)
+        elif "broom" in name_lower or "sapu" in name_lower:
+            return self.get_rpg_icon("sword_crystal", size)
+        elif "potion" in name_lower or "elixir" in name_lower or "ramuan" in name_lower:
+            return self.get_rpg_icon("potion_red_large", size)
+        elif "pedang" in name_lower or "sword" in name_lower or "blade" in name_lower:
+            return self.get_rpg_icon("sword_gold", size)
+        elif "armor" in name_lower or "perisai" in name_lower or "shield" in name_lower:
+            return self.get_rpg_icon("armor_iron", size)
+        elif "fragmen" in name_lower or "fragment" in name_lower or "kristal" in name_lower or "crystal" in name_lower:
+            return self.get_rpg_icon("crystal_fragment", size)
+        elif "relic" in name_lower or "altar" in name_lower or "gem" in name_lower:
+            return self.get_rpg_icon("chest_royal", size)
+        else:
+            return self.get_rpg_icon("chest_gold", size)
+
     def get_font(self, size: int = 18, bold: bool = False) -> pygame.font.Font:
         """Mengembalikan objek font (default font sistem yang bersih)."""
         key = ("default", size, bold)
@@ -242,7 +267,7 @@ class AssetManager:
         7: "node_5_cavern.png",
         8: "node_7_volcano.png",
         9: "node_3_mountain.png",
-        10: "node_8_campfire.png",
+        10: "node_10_boss.png",
     }
 
     def get_map_node_icon(self, loc_id: int, size: Tuple[int, int] = (52, 52)) -> pygame.Surface:

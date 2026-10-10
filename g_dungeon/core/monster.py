@@ -81,15 +81,45 @@ class Monster:
         self.temp_defense_buff = 0
         return absorbed, damage_to_hp
 
+    @property
+    def current_rage(self) -> int:
+        """
+        Kalkulasi dinamis progres meter kemarahan (0 - 100%):
+        - Jika sudah Enraged: 100% (Maksimal).
+        - Boss Kaiju: Akumulasi progres damage dari 0% s.d 100% saat HP menuju batas 50% HP.
+        - Monster biasa: Akumulasi progres damage dari 0% s.d 100% saat HP menuju batas 40% HP.
+        """
+        if not self.is_alive or self.hp <= 0:
+            return 0
+        if self.enraged:
+            return 100
+
+        dmg_taken = max(0, self.max_hp - self.hp)
+        if self.is_boss:
+            threshold = self.max_hp * 0.5
+            return min(100, max(0, int((dmg_taken / threshold) * 100)))
+        else:
+            threshold = self.max_hp * 0.6
+            return min(100, max(0, int((dmg_taken / threshold) * 100)))
+
     def check_enrage(self) -> bool:
         """
-        Boss Corrupted Crystal Kaiju:
-        Rage saat HP < 50% (+20 ATK tambahan dan peningkatan peluang kritis 20%).
+        Memeriksa apakah monster terpicu masuk ke mode Enraged:
+        - Boss Corrupted Crystal Kaiju: HP < 50% (+20 ATK & 20% Peluang Kritis).
+        - Monster Biasa: HP < 40% (+10 ATK fase mengamuk).
         """
-        if self.is_boss and self.hp < (self.max_hp * 0.5) and not self.enraged and self.is_alive:
+        if not self.is_alive or self.enraged:
+            return False
+
+        if self.is_boss and self.hp < (self.max_hp * 0.5):
             self.enraged = True
             self.attack += 20
             return True
+        elif not self.is_boss and self.hp < (self.max_hp * 0.4):
+            self.enraged = True
+            self.attack += 10
+            return True
+
         return False
 
     def decide_action(self, battle_turn: int) -> Tuple[str, int, str]:

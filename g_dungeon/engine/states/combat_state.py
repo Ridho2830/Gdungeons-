@@ -81,7 +81,7 @@ class CombatState(GameState):
             current_value=0,
             fill_color=COLOR_RAGE_ORANGE,
             label="Rage Meter",
-            show_numeric=False,
+            show_numeric=True,
         )
 
         # Panel Log Tempur
@@ -161,7 +161,13 @@ class CombatState(GameState):
         self.player_hp_bar.set_value(state.player.hp, state.player.max_hp)
         self.player_def_bar.set_value(state.player.defense, state.player.max_defense)
         self.monster_hp_bar.set_value(self.current_monster.hp, self.current_monster.max_hp)
-        self.monster_rage_bar.set_value(100 if self.current_monster.enraged else 0, 100)
+        self.monster_rage_bar.set_value(self.current_monster.current_rage, 100)
+        if self.current_monster.enraged:
+            self.monster_rage_bar.label = "[!! RAGE MODE (MAX) !!]"
+            self.monster_rage_bar.fill_color = (240, 50, 40)
+        else:
+            self.monster_rage_bar.label = "Rage Meter"
+            self.monster_rage_bar.fill_color = COLOR_RAGE_ORANGE
 
         self.is_player_turn = True
         self.turn_delay_timer = 0.0
@@ -194,8 +200,10 @@ class CombatState(GameState):
 
         # Cek apakah monster masuk ke Rage Mode
         if self.current_monster.check_enrage():
+            buff_desc = "+20 ATK & 20% Kritis" if self.current_monster.is_boss else "+10 ATK"
             self.floating_texts.add("MONSTER ENRAGED!", 920, 200, COLOR_RAGE_ORANGE)
-            self.combat_log.add_message(f"[!] {self.current_monster.name} memasuki RAGE MODE (+20 ATK & 20% Kritis)!")
+            self.combat_log.add_message(f"[!] {self.current_monster.name} memasuki RAGE MODE ({buff_desc})!")
+            self._trigger_shake(12.0, 0.4)
 
         # Animasi & Audio
         if self.player_entity:
@@ -248,7 +256,11 @@ class CombatState(GameState):
             self.floating_texts.add(f"HEAVY STRIKE: -{actual_dmg}", 920, 220, COLOR_GOLD)
             self.combat_log.add_message(f"[>] {player.name} melancarkan Heavy Strike! {actual_dmg} Physical DMG (Cooldown 3 Ronde)!")
 
-        self.current_monster.check_enrage()
+        if self.current_monster.check_enrage():
+            buff_desc = "+20 ATK & 20% Kritis" if self.current_monster.is_boss else "+10 ATK"
+            self.floating_texts.add("MONSTER ENRAGED!", 920, 200, COLOR_RAGE_ORANGE)
+            self.combat_log.add_message(f"[!] {self.current_monster.name} memasuki RAGE MODE ({buff_desc})!")
+            self._trigger_shake(12.0, 0.4)
 
         if self.player_entity:
             self.player_entity.trigger_attack()
@@ -509,7 +521,13 @@ class CombatState(GameState):
             self.player_hp_bar.set_value(p.hp, p.max_hp)
             self.player_def_bar.set_value(p.defense, p.max_defense)
             self.monster_hp_bar.set_value(self.current_monster.hp, self.current_monster.max_hp)
-            self.monster_rage_bar.set_value(100 if self.current_monster.enraged else 0, 100)
+            self.monster_rage_bar.set_value(self.current_monster.current_rage, 100)
+            if self.current_monster.enraged:
+                self.monster_rage_bar.label = "[!! RAGE MODE (MAX) !!]"
+                self.monster_rage_bar.fill_color = (240, 50, 40)
+            else:
+                self.monster_rage_bar.label = "Rage Meter"
+                self.monster_rage_bar.fill_color = COLOR_RAGE_ORANGE
 
         self.player_hp_bar.update(dt)
         self.player_def_bar.update(dt)

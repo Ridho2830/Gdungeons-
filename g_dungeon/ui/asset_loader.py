@@ -286,22 +286,30 @@ def get_map_background_tk(target_size: Tuple[int, int]) -> Optional[ImageTk.Phot
         return None
 
 
-def get_map_node_icon_tk(loc_id: int, target_size: Tuple[int, int] = (48, 48)) -> Optional[ImageTk.PhotoImage]:
+NODE_ICON_FILES: Dict[int, str] = {
+    1: "node_0_entry.png",
+    2: "node_4_forest.png",
+    3: "node_2_tower.png",
+    4: "node_6_relic.png",
+    5: "node_9_village.png",
+    6: "node_1_ruins.png",
+    7: "node_5_cavern.png",
+    8: "node_7_volcano.png",
+    9: "node_3_mountain.png",
+    10: "node_10_boss.png",
+}
+
+
+def get_map_node_icon_tk(loc_id: int, target_size: Tuple[int, int] = (46, 46)) -> Optional[object]:
     """Memuat icon pixel art untuk sebuah lokasi dungeon untuk Canvas Tkinter."""
     cache_key = f"node_icon_tk_{loc_id}_{target_size}"
     if cache_key in _TK_CACHE:
         return _TK_CACHE[cache_key]
 
-    pattern = f"node_{loc_id}_"
-    target_file = None
-    if os.path.exists(DIR_UI_MAP_NODES):
-        for f in os.listdir(DIR_UI_MAP_NODES):
-            if f.startswith(pattern):
-                target_file = os.path.join(DIR_UI_MAP_NODES, f)
-                break
-
-    if not target_file:
-        target_file = get_asset_path(f"node_{loc_id}_entry.png")
+    filename = NODE_ICON_FILES.get(loc_id, "node_0_entry.png")
+    target_file = os.path.join(DIR_UI_MAP_NODES, filename) if os.path.exists(DIR_UI_MAP_NODES) else None
+    if not target_file or not os.path.exists(target_file):
+        target_file = get_asset_path(filename)
 
     if not target_file or not os.path.exists(target_file):
         return None
@@ -323,16 +331,10 @@ def get_map_node_icon_ctk(loc_id: int, target_size: Tuple[int, int] = (68, 68)) 
     if cache_key in _IMAGE_CACHE:
         return _IMAGE_CACHE[cache_key]
 
-    pattern = f"node_{loc_id}_"
-    target_file = None
-    if os.path.exists(DIR_UI_MAP_NODES):
-        for f in os.listdir(DIR_UI_MAP_NODES):
-            if f.startswith(pattern):
-                target_file = os.path.join(DIR_UI_MAP_NODES, f)
-                break
-
-    if not target_file:
-        target_file = get_asset_path(f"node_{loc_id}_entry.png")
+    filename = NODE_ICON_FILES.get(loc_id, "node_0_entry.png")
+    target_file = os.path.join(DIR_UI_MAP_NODES, filename) if os.path.exists(DIR_UI_MAP_NODES) else None
+    if not target_file or not os.path.exists(target_file):
+        target_file = get_asset_path(filename)
 
     if not target_file or not os.path.exists(target_file):
         return None

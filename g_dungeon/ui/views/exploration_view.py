@@ -940,9 +940,11 @@ class ExplorationView(ctk.CTkFrame):
 
         self.dijkstra_highlight_edges.clear()
         if self.dijkstra_active:
-            for res in results:
-                for i in range(len(res.path_ids) - 1):
-                    u, v = res.path_ids[i], res.path_ids[i + 1]
+            # Sorot rute terpendek ke Boss Lair (#10 Throne of Extinction)
+            _, boss_path = self.dungeon.dijkstra(curr_id, 10)
+            if boss_path:
+                for i in range(len(boss_path) - 1):
+                    u, v = int(boss_path[i]), int(boss_path[i + 1])
                     self.dijkstra_highlight_edges.add(tuple(sorted((u, v))))
 
             self.btn_dijkstra.configure(
@@ -983,4 +985,10 @@ class ExplorationView(ctk.CTkFrame):
     def show_inventory_dialog(self) -> None:
         """Menampilkan dialog inventaris item kustom bertema Pixel RPG."""
         items = self.player.inventory.get_all_items()
-        InventoryDialog(self, items=items, player_name=self.player.name)
+        InventoryDialog(
+            self,
+            items=items,
+            player_name=self.player.name,
+            player=self.player,
+            on_use_callback=self.refresh_view,
+        )

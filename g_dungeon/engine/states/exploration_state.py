@@ -89,6 +89,8 @@ class ExplorationState(GameState):
         # Modal Inventory
         self.show_inventory_modal: bool = False
         self.btn_close_inv: Optional[UIButton] = None
+        self.btn_close_inv_top: Optional[UIButton] = None
+        self.inventory_item_buttons: List[UIButton] = []
 
     def enter(self, **kwargs: Any) -> None:
         """Dipanggil saat memasuki layar eksplorasi."""
@@ -103,9 +105,7 @@ class ExplorationState(GameState):
             # Pasif Mage: Arcane Intellect + Map Vision otomatis aktif
             if self.game.state_mgr.player.role == PlayerRole.MAGE:
                 self.dijkstra_active = True
-                res = self.game.state_mgr.dungeon.dijkstra_shortest_paths(loc.id)
-                self.dijkstra_paths = {r.target_id: r.path_ids for r in res}
-                self.log_box.add_message("[*] Pasif Mage aktif: Map Vision otomatis menyorot rute terpendek.")
+                self.log_box.add_message("[*] Pasif Mage aktif: Map Vision otomatis menyorot rute terpendek ke Boss.")
 
     def _setup_player_sprite(self) -> None:
         """Menginisialisasi sprite hidup animasi pahlawan di atas node peta."""
@@ -254,13 +254,9 @@ class ExplorationState(GameState):
             on_click=lambda: self.machine.push_state(STATE_PAUSE),
         )
 
-        # Tombol Tutup Inventory
-        self.btn_close_inv = UIButton(
-            rect=pygame.Rect(SCREEN_WIDTH // 2 - 60, 520, 120, 36),
-            text="Tutup",
-            font_size=14,
-            on_click=self._close_inventory,
-        )
+        # Rebuild modal inventaris jika sedang terbuka
+        if self.show_inventory_modal:
+            self._rebuild_inventory_ui()
 
     def _travel_to(self, target_id: int) -> None:
         """Memindahkan pemain ke ruangan lain via graph."""
@@ -269,11 +265,6 @@ class ExplorationState(GameState):
         success, msg = self.game.state_mgr.move_player(target_id)
         if success:
             self.audio.play("click")
-            self.log_box.add_message(f"[+] {msg}")
-            # Update Dijkstra jika Map Vision aktif
-            if self.dijkstra_active:
-                res = self.game.state_mgr.dungeon.dijkstra_shortest_paths(target_id)
-                self.dijkstra_paths = {r.target_id: r.path_ids for r in res}
             self._refresh_ui()
         else:
             self.audio.play("hit")
@@ -298,18 +289,14 @@ class ExplorationState(GameState):
         self._refresh_ui()
 
     def _toggle_map_vision(self) -> None:
-        """Menghitung rute tercepat Dijkstra ke semua ruangan menggunakan skill Mage."""
+        """Menyalakan/mematikan rute tercepat Dijkstra menggunakan skill Mage."""
         if not self.game.state_mgr:
             return
         self.dijkstra_active = not self.dijkstra_active
         if self.dijkstra_active:
             self.audio.play("magic")
-            start_id = self.game.state_mgr.current_location.id
-            res = self.game.state_mgr.dungeon.dijkstra_shortest_paths(start_id)
-            self.dijkstra_paths = {r.target_id: r.path_ids for r in res}
-            self.log_box.add_message("[*] Map Vision aktif! Algoritma Dijkstra memindai rute tercepat.")
+            self.log_box.add_message("[*] Map Vision aktif! Algoritma Dijkstra menyorot rute tercepat.")
         else:
-            self.dijkstra_paths.clear()
             self.log_box.add_message("[*] Map Vision dinonaktifkan.")
 
     def MoveToRoom(self, target_id: int) -> None:
@@ -337,22 +324,125 @@ class ExplorationState(GameState):
 
     def _open_inventory(self) -> None:
         self.show_inventory_modal = True
-
+        self.audio.play("click")
+        self._rebuild_inventory_ui()
 
     def _close_inventory(self) -> None:
         self.show_inventory_modal = False
+        self.audio.play("click")
+        self.inventory_item_buttons.clear()
+
+    def _rebuild_inventory_ui(self) -> None:
+        """Membangun tombol interaktif untuk setiap item di inventaris."""
+        self.inventory_item_buttons.clear()
+        if not self.game.state_mgr:
+            return
+
+        box_w, box_h = 680, 500
+        box_x = (SCREEN_WIDTH - box_w) // 2
+        box_y = (SCREEN_HEIGHT - box_h) // 2
+
+        # Tombol [X] di pojok kanan atas modal
+        self.btn_close_inv_top = UIButton(
+            rect=pygame.Rect(box_x + box_w - 46, box_y + 14, 30, 30),
+            text="X",
+            font_size=14,
+            hover_color=(190, 50, 40),
+            on_click=self._close_inventory,
+        )
+
+        # Tombol Tutup [ESC] di bagian bawah modal
+        self.btn_close_inv = UIButton(
+            rect=pygame.Rect(box_x + (box_w - 180) // 2, box_y + box_h - 48, 180, 36),
+            text="Tutup Tas [ESC]",
+            font_size=13,
+            on_click=self._close_inventory,
+        )
+
+        player = self.game.state_mgr.player
+        items = player.inventory.get_all_items()
+
+        items_start_y = box_y + 118
+        card_h = 58
+        gap_y = 6
+
+        for i, itm in enumerate(items[:5]):
+            card_y = items_start_y + i * (card_h + gap_y)
+            # Tombol Gunakan untuk Potion
+            if "potion" in itm.name.lower():
+                btn_w = 145
+                btn_h = 34
+                btn_x = box_x + box_w - 28 - btn_w
+                btn_y = card_y + (card_h - btn_h) // 2
+
+                is_full = player.hp >= player.max_hp
+                btn_text = "HP Penuh" if is_full else "Gunakan (+300 HP)"
+                btn_hover = (60, 60, 70) if is_full else (40, 140, 80)
+
+                btn = UIButton(
+                    rect=pygame.Rect(btn_x, btn_y, btn_w, btn_h),
+                    text=btn_text,
+                    font_size=12,
+                    icon_name="heal",
+                    hover_color=btn_hover,
+                    on_click=lambda name=itm.name: self._use_item_from_inventory(name),
+                )
+                self.inventory_item_buttons.append(btn)
+
+    def _use_item_from_inventory(self, item_name: str) -> None:
+        """Menggunakan item dari tas (misal: Health Potion memulihkan 300 HP)."""
+        if not self.game.state_mgr:
+            return
+
+        player = self.game.state_mgr.player
+        if "potion" in item_name.lower():
+            if player.hp >= player.max_hp:
+                self.audio.play("hit")
+                self.floating_texts.add("HP SUDAH PENUH!", SCREEN_WIDTH // 2, 280, (255, 200, 50))
+                self.log_box.add_message(f"[!] HP Anda sudah penuh ({player.hp}/{player.max_hp}). Potion disimpan.")
+                return
+
+            if player.potions <= 0:
+                self.audio.play("hit")
+                self.floating_texts.add("POTION HABIS!", SCREEN_WIDTH // 2, 280, COLOR_HP_RED)
+                self.log_box.add_message("[!] Health Potion sudah habis di dalam tas!")
+                return
+
+            healed = player.use_potion()
+            if healed > 0:
+                self.audio.play("heal")
+                self.floating_texts.add(f"+{healed} HP!", SCREEN_WIDTH // 2, 280, COLOR_HP_GREEN)
+                self.log_box.add_message(
+                    f"[+] Meminum Health Potion dari tas! Memulihkan +{healed} HP. Sisa stok: {player.potions} ({player.hp}/{player.max_hp} HP)."
+                )
+                self.hp_bar.set_value(player.hp, player.max_hp)
+                self._rebuild_inventory_ui()
+            else:
+                self.log_box.add_message("[!] Tidak dapat memulihkan HP.")
+        else:
+            self.audio.play("click")
+            self.log_box.add_message(f"[*] Item '{item_name}' adalah perlengkapan khusus yang aktif saat pertempuran/pencarian.")
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             if self.show_inventory_modal:
-                self.show_inventory_modal = False
+                self._close_inventory()
             else:
                 self.machine.push_state(STATE_PAUSE)
             return
 
+        # Tangani interaksi Modal Inventory jika sedang terbuka
         if self.show_inventory_modal:
-            if self.btn_close_inv:
-                self.btn_close_inv.handle_event(event)
+            if self.btn_close_inv_top and self.btn_close_inv_top.handle_event(event):
+                return
+            if self.btn_close_inv and self.btn_close_inv.handle_event(event):
+                return
+            for btn in self.inventory_item_buttons:
+                if btn.handle_event(event):
+                    return
+            # Cegah klik tembus ke peta di bawah modal
+            if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+                return
             return
 
         if self.btn_pause and self.btn_pause.handle_event(event):
@@ -388,7 +478,12 @@ class ExplorationState(GameState):
         for loc_id, loc in state.dungeon.locations.items():
             nx = int(self.map_rect.x + loc.ui_x * self.map_rect.width)
             ny = int(self.map_rect.y + loc.ui_y * self.map_rect.height)
-            if math.hypot(pos[0] - nx, pos[1] - ny) <= 28:
+            font_name = self.assets.get_font(12, bold=(loc_id == curr_id or loc_id in neighbors))
+            name_str = f"#{loc_id} {loc.name}"
+            pill_w = font_name.render(name_str, True, COLOR_TEXT_WHITE).get_width() + 14
+            pill_rect = pygame.Rect(nx - pill_w // 2, ny + 31, pill_w, 18)
+            dist = math.hypot(pos[0] - nx, pos[1] - ny)
+            if dist <= 32 or pill_rect.collidepoint(pos):
                 self.hovered_node_id = loc_id
                 break
 
@@ -413,8 +508,12 @@ class ExplorationState(GameState):
         for loc_id, loc in state.dungeon.locations.items():
             node_x = int(self.map_rect.x + loc.ui_x * self.map_rect.width)
             node_y = int(self.map_rect.y + loc.ui_y * self.map_rect.height)
+            font_name = self.assets.get_font(12, bold=(loc_id == curr_id or loc_id in neighbors))
+            name_str = f"#{loc_id} {loc.name}"
+            pill_w = font_name.render(name_str, True, COLOR_TEXT_WHITE).get_width() + 14
+            pill_rect = pygame.Rect(node_x - pill_w // 2, node_y + 31, pill_w, 18)
             dist = math.hypot(pos[0] - node_x, pos[1] - node_y)
-            if dist <= 28:
+            if dist <= 32 or pill_rect.collidepoint(pos):
                 if loc_id in neighbors:
                     self._travel_to(loc_id)
                 elif loc_id == curr_id:
@@ -471,6 +570,29 @@ class ExplorationState(GameState):
         # Floating damage / alerts ("TERKUNCI!", dsb.)
         self.floating_texts.render(surface)
 
+    def get_active_dijkstra_info(self) -> Tuple[Set[Tuple[int, int]], int, List[int], int]:
+        """
+        Mengembalikan (edges_set, total_distance, path_node_ids, target_room_id).
+        Jika mouse sedang melayang di atas ruangan lain, rute terpendek beradaptasi dinamis
+        ke ruangan yang sedang ditunjuk; jika tidak, rute terpendek diarahkan ke Boss Lair (#10)!
+        """
+        if not self.dijkstra_active or not self.game.state_mgr:
+            return set(), 0, [], 0
+
+        curr_id = self.game.state_mgr.current_location.id
+        target_id = 10  # Default ke Boss Lair (#10)
+
+        if self.hovered_node_id is not None and self.hovered_node_id != curr_id:
+            target_id = self.hovered_node_id
+
+        dist, path = self.game.state_mgr.dungeon.dijkstra(curr_id, target_id)
+        if dist == -1 or not path:
+            return set(), 0, [], 0
+
+        edges = set()
+        for i in range(len(path) - 1):
+            edges.add(tuple(sorted((int(path[i]), int(path[i + 1])))))
+        return edges, dist, [int(x) for x in path], target_id
 
     def _render_graph_map(self, surface: pygame.Surface) -> None:
         """Menggambar atlas dungeon 10 ruangan dengan tekstur lantai batu, jalur cobblestone, dan ikon pixel art."""
@@ -513,11 +635,24 @@ class ExplorationState(GameState):
         surface.blit(h_txt, h_txt.get_rect(center=header_badge.center))
 
         # Pita legenda di bawah peta
-        legend_badge = pygame.Rect(self.map_rect.centerx - 225, self.map_rect.bottom - 26, 450, 20)
-        pygame.draw.rect(surface, (20, 16, 28, 210), legend_badge, border_radius=4)
-        leg_font = self.assets.get_font(11)
-        leg_txt = leg_font.render("[Emas] Posisi Kamu  |  [Hijau] Dapat Ditempuh  |  [Cyan] Rute Terpendek (Mage)", True, (200, 195, 215))
-        surface.blit(leg_txt, leg_txt.get_rect(center=legend_badge.center))
+        legend_badge = pygame.Rect(self.map_rect.centerx - 260, self.map_rect.bottom - 32, 520, 24)
+        pygame.draw.rect(surface, (18, 14, 26, 235), legend_badge, border_radius=5)
+        pygame.draw.rect(surface, (110, 90, 50), legend_badge, width=1, border_radius=5)
+
+        # 4 item legenda: Posisi Kamu (Emas), Jalur Terbuka (Hijau), Rute Dijkstra (Cyan), Selesai (Hijau ✓)
+        leg_items = [
+            ((255, 215, 50), "Posisi Kamu"),
+            ((46, 204, 113), "Jalur Terbuka"),
+            ((0, 230, 255), "Rute Dijkstra (Mage)"),
+            ((80, 220, 120), "v Selesai/Aman"),
+        ]
+        cur_lx = legend_badge.x + 14
+        leg_f = self.assets.get_font(11)
+        for col, label in leg_items:
+            pygame.draw.circle(surface, col, (cur_lx + 4, legend_badge.centery), 4)
+            t_s = leg_f.render(label, True, (215, 210, 230))
+            surface.blit(t_s, (cur_lx + 12, legend_badge.centery - t_s.get_height() // 2))
+            cur_lx += t_s.get_width() + 22
 
         if not self.game.state_mgr:
             return
@@ -525,6 +660,9 @@ class ExplorationState(GameState):
         dungeon = self.game.state_mgr.dungeon
         curr_id = self.game.state_mgr.current_location.id
         neighbors_set = {n_loc.id for n_loc, _ in dungeon.get_neighbors(curr_id)}
+
+        # Kalkulasi rute terpendek Dijkstra yang sedang aktif
+        dijkstra_edges, d_dist, d_path, d_target = self.get_active_dijkstra_info()
 
         # -------------------------------------------------------------
         # 1. Gambar Jalur Cobblestone (Edges) dengan Bobot Jarak Tempuh
@@ -549,39 +687,50 @@ class ExplorationState(GameState):
                 x2 = int(self.map_rect.x + loc_to.ui_x * self.map_rect.width)
                 y2 = int(self.map_rect.y + loc_to.ui_y * self.map_rect.height)
 
-                # Jalur Dijkstra (Glow Emas jika Map Vision aktif)
-                is_dijkstra_path = False
-                if self.dijkstra_active:
-                    for path in self.dijkstra_paths.values():
-                        for k in range(len(path) - 1):
-                            if (path[k] == from_id and path[k + 1] == to_id) or (
-                                path[k] == to_id and path[k + 1] == from_id
-                            ):
-                                is_dijkstra_path = True
-                                break
+                is_dijkstra = edge_pair in dijkstra_edges
+                is_neighbor_edge = (from_id == curr_id and to_id in neighbors_set) or (to_id == curr_id and from_id in neighbors_set)
 
                 # Lapisan 1: Bayangan parit batu gelap (Drop Shadow)
-                pygame.draw.line(surface, (14, 10, 20), (x1, y1), (x2, y2), 7)
+                pygame.draw.line(surface, (10, 8, 16), (x1, y1), (x2, y2), 7)
 
-                if is_dijkstra_path:
-                    # Rute bercahaya sihir emas (Mage Dijkstra Vision)
-                    pygame.draw.line(surface, (255, 215, 60), (x1, y1), (x2, y2), 4)
+                if is_dijkstra:
+                    # Pendar sihir Arcane Cyan Dijkstra (Mage Map Vision)
+                    pulse = (math.sin(self.anim_time * 6.0) + 1.0) * 0.5
+                    glow_w = 5 + int(pulse * 2)
+                    glow_col = (0, int(180 + 40 * pulse), 255)
+                    pygame.draw.line(surface, (10, 90, 140), (x1, y1), (x2, y2), glow_w + 3)
+                    pygame.draw.line(surface, glow_col, (x1, y1), (x2, y2), glow_w)
+                    pygame.draw.line(surface, (200, 245, 255), (x1, y1), (x2, y2), 2)
+                elif is_neighbor_edge:
+                    # Jalur yang terhubung langsung ke ruangan aktif pahlawan (Emerald Cobblestone)
+                    pygame.draw.line(surface, (25, 95, 55), (x1, y1), (x2, y2), 4)
+                    pygame.draw.line(surface, (46, 204, 113), (x1, y1), (x2, y2), 2)
                 else:
                     # Jalur batu cobblestone standar
-                    pygame.draw.line(surface, (75, 68, 92), (x1, y1), (x2, y2), 3)
+                    pygame.draw.line(surface, (68, 60, 84), (x1, y1), (x2, y2), 3)
 
                 # Tablet batu penanda bobot jarak di tengah jalur (Stone Milestone)
                 mid_x = (x1 + x2) // 2
                 mid_y = (y1 + y2) // 2
                 badge_rect = pygame.Rect(mid_x - 13, mid_y - 9, 26, 18)
 
-                badge_bg = (160, 125, 25) if is_dijkstra_path else (30, 24, 40)
-                badge_border = COLOR_GOLD if is_dijkstra_path else (95, 80, 120)
+                if is_dijkstra:
+                    badge_bg = (10, 50, 75)
+                    badge_border = (0, 230, 255)
+                    w_col = (200, 250, 255)
+                elif is_neighbor_edge:
+                    badge_bg = (20, 50, 35)
+                    badge_border = (46, 204, 113)
+                    w_col = (180, 255, 210)
+                else:
+                    badge_bg = (28, 22, 38)
+                    badge_border = (85, 72, 105)
+                    w_col = COLOR_TEXT_MUTED
+
                 pygame.draw.rect(surface, badge_bg, badge_rect, border_radius=4)
                 pygame.draw.rect(surface, badge_border, badge_rect, width=1, border_radius=4)
 
                 font_w = self.assets.get_font(12, bold=True)
-                w_col = (255, 245, 200) if is_dijkstra_path else COLOR_TEXT_MUTED
                 w_surf = font_w.render(str(weight), True, w_col)
                 surface.blit(w_surf, w_surf.get_rect(center=badge_rect.center))
 
@@ -597,6 +746,22 @@ class ExplorationState(GameState):
             is_current = (loc_id == curr_id)
             is_neighbor = (loc_id in neighbors_set)
             is_hovered = (loc_id == self.hovered_node_id)
+            is_boss = (loc.is_boss_lair or loc_id == 10)
+            boss_locked = is_boss and (self.game.state_mgr.player.crystal_fragments < 2)
+
+            # Cek status ruangan selesai/cleared
+            is_cleared = False
+            if loc.event_type == RoomEvent.BATTLE and loc.monster_name:
+                if loc.monster_name in self.game.state_mgr.defeated_monsters:
+                    is_cleared = True
+            elif loc.event_type == RoomEvent.PUZZLE_SLIDING and self.game.state_mgr.completed_sliding_puzzle:
+                is_cleared = True
+            elif loc.event_type == RoomEvent.PUZZLE_STACK and self.game.state_mgr.completed_stack_puzzle:
+                is_cleared = True
+            elif loc.event_type == RoomEvent.QUEST_CONVEYOR and self.game.state_mgr.completed_village_quest:
+                is_cleared = True
+            elif loc.event_type == RoomEvent.DIALOG_FOREST and self.game.state_mgr.completed_forest_dialogue:
+                is_cleared = True
 
             if is_current:
                 current_node_pos = (nx, ny)
@@ -625,55 +790,97 @@ class ExplorationState(GameState):
             elif is_hovered:
                 # Highlight cyan terang saat mouse melayang
                 pygame.draw.circle(surface, (120, 220, 255), (nx, ny), 28, 2)
+            elif boss_locked:
+                # Cincin segel merah untuk Boss Lair yang terkunci
+                pygame.draw.circle(surface, (200, 45, 45), (nx, ny), 28, 2)
             else:
                 # Cincin besi antik standar
                 pygame.draw.circle(surface, (85, 75, 100), (nx, ny), 27, 2)
 
-            # Pin Badge Tipe Event Ruangan di Sudut Kanan Atas (nx + 18, ny - 18)
+            # Pin Badge Status & Tipe Event di Sudut Kanan Atas (nx + 18, ny - 18)
             pin_x, pin_y = nx + 18, ny - 18
-            pin_bg = (60, 50, 75)
-            pin_border = (120, 100, 140)
-            pin_icon_name: Optional[str] = None
+            pin_r = 10
 
-            if loc.event_type == RoomEvent.BATTLE:
-                pin_bg = (180, 40, 40)
-                pin_border = COLOR_GOLD
-                pin_icon_name = "atk"
-            elif loc.event_type in (RoomEvent.PUZZLE_SLIDING, RoomEvent.PUZZLE_STACK, RoomEvent.QUEST_CONVEYOR):
-                pin_bg = (100, 50, 160)
-                pin_border = (180, 130, 255)
-                pin_icon_name = "book_arcane"
-            elif loc.event_type == RoomEvent.SAFETY_HEAL:
-                pin_bg = (35, 130, 60)
-                pin_border = (100, 225, 140)
-                pin_icon_name = "heal"
-            elif loc.event_type == RoomEvent.DIALOG_FOREST:
-                pin_bg = (160, 120, 30)
-                pin_border = COLOR_GOLD
-                pin_icon_name = "book_gold"
+            if is_boss:
+                if boss_locked:
+                    pin_bg = (190, 35, 35)
+                    pin_border = (255, 120, 120)
+                    pygame.draw.circle(surface, pin_bg, (pin_x, pin_y), pin_r)
+                    pygame.draw.circle(surface, pin_border, (pin_x, pin_y), pin_r, 1)
+                    font_pin = self.assets.get_font(10, bold=True)
+                    lock_txt = font_pin.render("X", True, (255, 255, 255))
+                    surface.blit(lock_txt, lock_txt.get_rect(center=(pin_x, pin_y)))
+                else:
+                    pin_bg = (140, 30, 160)
+                    pin_border = COLOR_GOLD
+                    pygame.draw.circle(surface, pin_bg, (pin_x, pin_y), pin_r)
+                    pygame.draw.circle(surface, pin_border, (pin_x, pin_y), pin_r, 1)
+                    font_pin = self.assets.get_font(10, bold=True)
+                    boss_txt = font_pin.render("!", True, COLOR_GOLD)
+                    surface.blit(boss_txt, boss_txt.get_rect(center=(pin_x, pin_y)))
+            elif is_cleared:
+                # Badge Hijau Checkmark: Ruangan Selesai / Aman
+                pin_bg = (30, 145, 65)
+                pin_border = (120, 245, 155)
+                pygame.draw.circle(surface, pin_bg, (pin_x, pin_y), pin_r)
+                pygame.draw.circle(surface, pin_border, (pin_x, pin_y), pin_r, 1)
+                font_pin = self.assets.get_font(11, bold=True)
+                chk_txt = font_pin.render("v", True, (255, 255, 255))
+                surface.blit(chk_txt, chk_txt.get_rect(center=(pin_x, pin_y - 1)))
+            else:
+                pin_bg = (60, 50, 75)
+                pin_border = (120, 100, 140)
+                pin_icon_name: Optional[str] = None
 
-            pygame.draw.circle(surface, pin_bg, (pin_x, pin_y), 9)
-            pygame.draw.circle(surface, pin_border, (pin_x, pin_y), 9, 1)
+                if loc.event_type == RoomEvent.BATTLE:
+                    pin_bg = (180, 40, 40)
+                    pin_border = COLOR_GOLD
+                    pin_icon_name = "atk"
+                elif loc.event_type in (RoomEvent.PUZZLE_SLIDING, RoomEvent.PUZZLE_STACK, RoomEvent.QUEST_CONVEYOR):
+                    pin_bg = (100, 50, 160)
+                    pin_border = (180, 130, 255)
+                    pin_icon_name = "book_arcane"
+                elif loc.event_type == RoomEvent.SAFETY_HEAL:
+                    pin_bg = (35, 130, 60)
+                    pin_border = (100, 225, 140)
+                    pin_icon_name = "heal"
+                elif loc.event_type == RoomEvent.DIALOG_FOREST:
+                    pin_bg = (160, 120, 30)
+                    pin_border = COLOR_GOLD
+                    pin_icon_name = "book_gold"
 
-            if pin_icon_name:
-                mini_icon = self.assets.get_rpg_icon(pin_icon_name, size=(12, 12))
-                if mini_icon:
-                    surface.blit(mini_icon, mini_icon.get_rect(center=(pin_x, pin_y)))
+                pygame.draw.circle(surface, pin_bg, (pin_x, pin_y), 9)
+                pygame.draw.circle(surface, pin_border, (pin_x, pin_y), 9, 1)
+
+                if pin_icon_name:
+                    mini_icon = self.assets.get_rpg_icon(pin_icon_name, size=(12, 12))
+                    if mini_icon:
+                        surface.blit(mini_icon, mini_icon.get_rect(center=(pin_x, pin_y)))
 
             # Papan Nama Ruangan (Pill Banner) di Bawah Node
             name_str = f"#{loc_id} {loc.name}"
             font_name = self.assets.get_font(12, bold=(is_current or is_neighbor))
-            name_surf = font_name.render(
-                name_str,
-                True,
-                COLOR_GOLD if is_current else ((130, 255, 180) if is_neighbor else COLOR_TEXT_WHITE),
-            )
 
+            if is_current:
+                name_col = COLOR_GOLD
+                p_border = COLOR_GOLD
+            elif is_neighbor:
+                name_col = (130, 255, 180)
+                p_border = (46, 204, 113)
+            elif boss_locked:
+                name_col = (240, 130, 130)
+                p_border = (180, 45, 45)
+            elif is_cleared:
+                name_col = (170, 235, 190)
+                p_border = (45, 120, 70)
+            else:
+                name_col = COLOR_TEXT_WHITE
+                p_border = (70, 60, 85)
+
+            name_surf = font_name.render(name_str, True, name_col)
             pill_w = name_surf.get_width() + 14
             pill_rect = pygame.Rect(nx - pill_w // 2, ny + 31, pill_w, 18)
             pygame.draw.rect(surface, (20, 16, 28, 230), pill_rect, border_radius=4)
-
-            p_border = COLOR_GOLD if is_current else ((46, 204, 113) if is_neighbor else (70, 60, 85))
             pygame.draw.rect(surface, p_border, pill_rect, width=1, border_radius=4)
             surface.blit(name_surf, name_surf.get_rect(center=pill_rect.center))
 
@@ -708,31 +915,78 @@ class ExplorationState(GameState):
             h_loc = dungeon.get_location_by_id(self.hovered_node_id)
             if h_loc:
                 mx, my = pygame.mouse.get_pos()
-                tt_lines = [f"#{h_loc.id} {h_loc.name}"]
+                tt_lines: List[Tuple[str, Tuple[int, int, int], bool]] = [
+                    (f"#{h_loc.id} {h_loc.name}", COLOR_GOLD, True)
+                ]
+
+                # Status Ruangan
+                h_is_boss = (h_loc.is_boss_lair or h_loc.id == 10)
+                h_boss_locked = h_is_boss and (self.game.state_mgr.player.crystal_fragments < 2)
+                h_cleared = False
+                if h_loc.event_type == RoomEvent.BATTLE and h_loc.monster_name:
+                    if h_loc.monster_name in self.game.state_mgr.defeated_monsters:
+                        h_cleared = True
+                elif h_loc.event_type == RoomEvent.PUZZLE_SLIDING and self.game.state_mgr.completed_sliding_puzzle:
+                    h_cleared = True
+                elif h_loc.event_type == RoomEvent.PUZZLE_STACK and self.game.state_mgr.completed_stack_puzzle:
+                    h_cleared = True
+                elif h_loc.event_type == RoomEvent.QUEST_CONVEYOR and self.game.state_mgr.completed_village_quest:
+                    h_cleared = True
+                elif h_loc.event_type == RoomEvent.DIALOG_FOREST and self.game.state_mgr.completed_forest_dialogue:
+                    h_cleared = True
+
+                if h_is_boss:
+                    if h_boss_locked:
+                        tt_lines.append((f"[TERKUNCI: Butuh 2 Fragmen (saat ini: {self.game.state_mgr.player.crystal_fragments}/2)]", (255, 90, 90), False))
+                    else:
+                        tt_lines.append(("[SEGEL TERBUKA: Siap Menantang Boss Kaiju!]", (255, 215, 60), False))
+                elif h_cleared:
+                    tt_lines.append(("[STATUS: DIBERSIHKAN / AMAN]", (100, 240, 140), False))
+                elif h_loc.event_type == RoomEvent.BATTLE and h_loc.monster_name:
+                    tt_lines.append((f"[MONSTER: {h_loc.monster_name}]", (255, 120, 100), False))
+                elif h_loc.event_type in (RoomEvent.PUZZLE_SLIDING, RoomEvent.PUZZLE_STACK, RoomEvent.QUEST_CONVEYOR):
+                    tt_lines.append(("[TEKA-TEKI: Hadiah Fragmen Kristal]", (190, 140, 255), False))
+                elif h_loc.event_type == RoomEvent.DIALOG_FOREST:
+                    tt_lines.append(("[DIALOG NPC: Roh Pohon Kuno Gyoot]", (240, 200, 80), False))
+
+                # Keterjangkauan Jalur
                 if self.hovered_node_id in neighbors_set:
                     dist = dungeon.get_distance(curr_id, self.hovered_node_id)
-                    tt_lines.append(f">> Terjangkau (Jarak: {dist})")
+                    tt_lines.append((f">> Dapat Ditempuh Langsung (Jarak: {dist} langkah)", (120, 255, 160), False))
                 else:
-                    tt_lines.append(">> Belum terhubung langsung")
+                    tt_lines.append((">> Perlu transit melalui ruangan lain", COLOR_TEXT_MUTED, False))
 
-                tt_font = self.assets.get_font(12)
-                rendered_lines = [tt_font.render(tl, True, COLOR_GOLD if idx == 0 else COLOR_TEXT_WHITE) for idx, tl in enumerate(tt_lines)]
-                max_w = max(r.get_width() for r in rendered_lines) + 16
-                tt_h = len(rendered_lines) * 18 + 10
-                tt_rect = pygame.Rect(mx + 12, my - 24, max_w, tt_h)
+                # Jalur Dijkstra (Mage Map Vision)
+                if self.dijkstra_active and d_path and d_target == self.hovered_node_id:
+                    path_str = " -> ".join(f"#{nid}" for nid in d_path)
+                    tt_lines.append((f"Rute Terpendek: {path_str} ({d_dist} langkah)", (0, 230, 255), False))
 
-                # Pastikan tooltip tidak keluar dari batas layar
-                if tt_rect.right > SCREEN_WIDTH:
-                    tt_rect.x = mx - max_w - 8
-                if tt_rect.bottom > SCREEN_HEIGHT:
-                    tt_rect.y = my - tt_h - 8
+                font_tt = self.assets.get_font(12)
+                font_tt_bold = self.assets.get_font(12, bold=True)
+                rendered_lines = []
+                for txt, col, is_b in tt_lines:
+                    f = font_tt_bold if is_b else font_tt
+                    rendered_lines.append(f.render(txt, True, col))
 
-                pygame.draw.rect(surface, (22, 17, 30), tt_rect, border_radius=5)
-                pygame.draw.rect(surface, (120, 100, 150), tt_rect, width=1, border_radius=5)
-                line_y = tt_rect.y + 5
+                max_w = max(r.get_width() for r in rendered_lines) + 20
+                tt_h = len(rendered_lines) * 19 + 12
+                tt_rect = pygame.Rect(mx + 14, my - 24, max_w, tt_h)
+                if tt_rect.right > SCREEN_WIDTH - 10:
+                    tt_rect.x = mx - max_w - 10
+                if tt_rect.bottom > SCREEN_HEIGHT - 10:
+                    tt_rect.y = my - tt_h - 10
+                if tt_rect.left < 10:
+                    tt_rect.left = 10
+                if tt_rect.top < 10:
+                    tt_rect.top = 10
+
+                pygame.draw.rect(surface, (20, 16, 28), tt_rect, border_radius=6)
+                pygame.draw.rect(surface, (110, 95, 140), tt_rect, width=1, border_radius=6)
+                ly = tt_rect.y + 6
                 for r in rendered_lines:
-                    surface.blit(r, (tt_rect.x + 8, line_y))
-                    line_y += 18
+                    surface.blit(r, (tt_rect.x + 10, ly))
+                    ly += 19
+
 
     def _render_room_panel(self, surface: pygame.Surface) -> None:
         """Panel informasi ruangan dan navigasi jalur bertetangga."""
@@ -863,41 +1117,145 @@ class ExplorationState(GameState):
         self.log_box.render(surface)
 
     def _render_inventory_modal(self, surface: pygame.Surface) -> None:
-        """Jendela modal inventaris pemain."""
+        """Jendela modal inventaris pemain bernuansa RPG 16-bit pixel art interaktif."""
+        # 1. Overlay redup hitam semi-transparan
         dim_surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        dim_surf.fill((0, 0, 0, 180))
+        dim_surf.fill((0, 0, 0, 195))
         surface.blit(dim_surf, (0, 0))
 
-        box_w, box_h = 560, 400
-        box_rect = pygame.Rect((SCREEN_WIDTH - box_w) // 2, (SCREEN_HEIGHT - box_h) // 2, box_w, box_h)
+        box_w, box_h = 680, 500
+        box_x = (SCREEN_WIDTH - box_w) // 2
+        box_y = (SCREEN_HEIGHT - box_h) // 2
+        box_rect = pygame.Rect(box_x, box_y, box_w, box_h)
 
-        pygame.draw.rect(surface, COLOR_PANEL_BG, box_rect, border_radius=10)
-        pygame.draw.rect(surface, COLOR_GOLD, box_rect, width=2, border_radius=10)
+        # Panel Latar Belakang Modal
+        pygame.draw.rect(surface, (14, 17, 26), box_rect, border_radius=12)
+        pygame.draw.rect(surface, COLOR_GOLD, box_rect, width=2, border_radius=12)
+        pygame.draw.rect(surface, (38, 46, 68), box_rect.inflate(-4, -4), width=1, border_radius=10)
 
-        font_h = self.assets.get_font(20, bold=True)
-        h_surf = font_h.render("[ TAS / INVENTARIS PEMAIN ]", True, COLOR_GOLD)
-        surface.blit(h_surf, (box_rect.x + 25, box_rect.y + 20))
+        # 2. Header Modal & Ikon Peti Emas
+        chest_icon = self.assets.get_rpg_icon("chest_royal", (28, 28)) or self.assets.get_rpg_icon("inventory", (28, 28))
+        if chest_icon:
+            surface.blit(chest_icon, (box_x + 24, box_y + 16))
 
-        if self.game.state_mgr:
-            inv = self.game.state_mgr.player.inventory
-            font_item = self.assets.get_font(14)
-            items = inv.get_all_items()
-            y = box_rect.y + 65
-            if not items:
-                none_surf = font_item.render("Tas masih kosong.", True, COLOR_TEXT_MUTED)
-                surface.blit(none_surf, (box_rect.x + 25, y))
-            else:
-                for itm in items:
-                    icon_surf = self.assets.get_item_icon(itm.name, size=(22, 22))
-                    text_x = box_rect.x + 25
-                    if icon_surf:
-                        surface.blit(icon_surf, (text_x, y))
-                        text_x += icon_surf.get_width() + 10
+        font_title = self.assets.get_font(18, bold=True)
+        t_surf = font_title.render("TAS & INVENTARIS PETUALANG", True, COLOR_GOLD)
+        surface.blit(t_surf, (box_x + 60, box_y + 18))
 
-                    t_str = f"{itm.name} (x{itm.quantity}) - {itm.description}"
-                    it_surf = font_item.render(t_str, True, COLOR_TEXT_WHITE)
-                    surface.blit(it_surf, (text_x, y + 2))
-                    y += 32
+        # Tombol [X] di pojok kanan atas
+        if self.btn_close_inv_top:
+            self.btn_close_inv_top.render(surface)
 
+        if not self.game.state_mgr:
+            return
+
+        p = self.game.state_mgr.player
+
+        # 3. Banner Ringkasan Status Pahlawan
+        banner_rect = pygame.Rect(box_x + 20, box_y + 54, box_w - 40, 48)
+        pygame.draw.rect(surface, (20, 24, 38), banner_rect, border_radius=6)
+        pygame.draw.rect(surface, (40, 48, 70), banner_rect, width=1, border_radius=6)
+
+        font_stat_b = self.assets.get_font(12, bold=True)
+        font_stat_m = self.assets.get_font(12)
+
+        # Nama & Role
+        name_txt = font_stat_b.render(f"{p.name} ({p.role.value})", True, (240, 240, 255))
+        surface.blit(name_txt, (banner_rect.x + 14, banner_rect.y + 8))
+
+        # Mini HP Bar
+        hp_bar_bg = pygame.Rect(banner_rect.x + 14, banner_rect.y + 28, 140, 12)
+        pygame.draw.rect(surface, (40, 15, 15), hp_bar_bg, border_radius=3)
+        hp_ratio = max(0.0, min(1.0, p.hp / max(1, p.max_hp)))
+        if hp_ratio > 0:
+            hp_bar_fill = pygame.Rect(banner_rect.x + 14, banner_rect.y + 28, int(140 * hp_ratio), 12)
+            pygame.draw.rect(surface, (46, 204, 113), hp_bar_fill, border_radius=3)
+        pygame.draw.rect(surface, (80, 90, 110), hp_bar_bg, width=1, border_radius=3)
+
+        hp_txt = self.assets.get_font(10, bold=True).render(f"{p.hp}/{p.max_hp} HP", True, (255, 255, 255))
+        surface.blit(hp_txt, (hp_bar_bg.x + 148, hp_bar_bg.y - 1))
+
+        # Stats di sisi kanan banner
+        st_txt = font_stat_m.render(
+            f"DEF: {p.defense}   |   Gold: {p.gold}   |   Fragmen: {p.crystal_fragments}/2   |   Potion: {p.potions}",
+            True,
+            COLOR_GOLD,
+        )
+        surface.blit(st_txt, (banner_rect.right - st_txt.get_width() - 14, banner_rect.y + 16))
+
+        # 4. Kotak Kontainer Slot Item
+        items_rect = pygame.Rect(box_x + 20, box_y + 110, box_w - 40, 328)
+        pygame.draw.rect(surface, (10, 12, 18), items_rect, border_radius=8)
+        pygame.draw.rect(surface, (28, 34, 50), items_rect, width=1, border_radius=8)
+
+        items = p.inventory.get_all_items()
+        font_item_name = self.assets.get_font(13, bold=True)
+        font_item_desc = self.assets.get_font(11)
+        font_badge = self.assets.get_font(11, bold=True)
+
+        if not items:
+            empty_chest = self.assets.get_rpg_icon("chest_wood", (44, 44))
+            cy = items_rect.y + 70
+            if empty_chest:
+                surface.blit(empty_chest, ((SCREEN_WIDTH - 44) // 2, cy))
+                cy += 54
+            em_title = font_title.render("Tas Petualang Masih Kosong!", True, (220, 220, 230))
+            surface.blit(em_title, ((SCREEN_WIDTH - em_title.get_width()) // 2, cy))
+            cy += 28
+            em_sub = font_item_desc.render("Kalahkan monster atau selesaikan teka-teki untuk mengumpulkan item & relik.", True, COLOR_TEXT_MUTED)
+            surface.blit(em_sub, ((SCREEN_WIDTH - em_sub.get_width()) // 2, cy))
+        else:
+            card_h = 58
+            gap_y = 6
+            start_y = items_rect.y + 8
+
+            for i, itm in enumerate(items[:5]):
+                cy = start_y + i * (card_h + gap_y)
+                card_rect = pygame.Rect(items_rect.x + 8, cy, items_rect.width - 16, card_h)
+
+                # Background kartu item
+                pygame.draw.rect(surface, (18, 22, 34), card_rect, border_radius=6)
+                pygame.draw.rect(surface, (36, 44, 64), card_rect, width=1, border_radius=6)
+
+                # Slot Ikon Kotak Gelap
+                slot_rect = pygame.Rect(card_rect.x + 8, card_rect.y + 7, 44, 44)
+                pygame.draw.rect(surface, (8, 10, 16), slot_rect, border_radius=4)
+                pygame.draw.rect(surface, (30, 36, 52), slot_rect, width=1, border_radius=4)
+
+                icon_surf = self.assets.get_item_icon(itm.name, size=(28, 28))
+                if icon_surf:
+                    surface.blit(icon_surf, (slot_rect.x + 8, slot_rect.y + 8))
+
+                # Nama Item & Jumlah
+                name_surf = font_item_name.render(itm.name, True, COLOR_GOLD)
+                surface.blit(name_surf, (slot_rect.right + 12, card_rect.y + 8))
+
+                # Badge Jumlah (xN)
+                qty_str = f"x{itm.quantity}"
+                qty_txt = font_badge.render(qty_str, True, (255, 255, 255))
+                qty_w = qty_txt.get_width() + 10
+                qty_pill = pygame.Rect(slot_rect.right + 16 + name_surf.get_width(), card_rect.y + 8, qty_w, 18)
+                pygame.draw.rect(surface, (50, 40, 90), qty_pill, border_radius=4)
+                surface.blit(qty_txt, (qty_pill.x + 5, qty_pill.y + 2))
+
+                # Deskripsi & Value
+                desc_text = itm.description
+                if itm.value:
+                    desc_text += f" (Nilai/Kekuatan: {itm.value})"
+                desc_surf = font_item_desc.render(desc_text, True, (180, 185, 205))
+                surface.blit(desc_surf, (slot_rect.right + 12, card_rect.y + 30))
+
+                # Badge kategori untuk item non-potion
+                if "potion" not in itm.name.lower():
+                    cat_txt = "[ Senjata Tempur ]" if itm.value > 0 else "[ Relik / Kunci ]"
+                    cat_col = (130, 90, 220) if itm.value > 0 else (220, 160, 40)
+                    cat_surf = font_badge.render(cat_txt, True, cat_col)
+                    surface.blit(cat_surf, (card_rect.right - cat_surf.get_width() - 14, card_rect.y + 18))
+
+            # Render tombol-tombol aksi item (misal: Gunakan Potion)
+            for btn in self.inventory_item_buttons:
+                btn.render(surface)
+
+        # 5. Tombol Tutup di Bawah
         if self.btn_close_inv:
             self.btn_close_inv.render(surface)

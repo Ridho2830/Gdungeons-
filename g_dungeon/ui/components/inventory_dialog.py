@@ -4,7 +4,8 @@ Description: Dialog popup modal inventaris tas petualang (Inventory Dialog)
 bertema 2D Pixel RPG lengkap dengan ikon aset 16x16 Assorted RPG Icons.
 """
 
-from typing import List, Optional
+from typing import Callable, List, Optional
+from tkinter import messagebox
 import customtkinter as ctk
 
 from core.item import Item
@@ -19,13 +20,16 @@ from ui.theme import (
 class InventoryDialog(ctk.CTkToplevel):
     """Jendela pop-up modal inventaris petualang bertema Pixel Art RPG."""
 
-    def __init__(self, parent, items: List[Item], player_name: str = "Hero") -> None:
+    def __init__(self, parent, items: List[Item], player_name: str = "Hero", player=None, on_use_callback: Optional[Callable] = None) -> None:
         super().__init__(parent)
         self.items = items
         self.player_name = player_name
+        self.player = player
+        self.on_use_callback = on_use_callback
+        self.container = None
 
         self.title("Tas Petualang - G-Dungeons")
-        self.geometry("560x520")
+        self.geometry("580x540")
         self.resizable(False, False)
         self.configure(fg_color="#0B0D14")
 
@@ -36,8 +40,8 @@ class InventoryDialog(ctk.CTkToplevel):
         # Pusatkan modal relatif terhadap jendela induk
         self.update_idletasks()
         try:
-            px = parent.winfo_rootx() + (parent.winfo_width() // 2) - 280
-            py = parent.winfo_rooty() + (parent.winfo_height() // 2) - 260
+            px = parent.winfo_rootx() + (parent.winfo_width() // 2) - 290
+            py = parent.winfo_rooty() + (parent.winfo_height() // 2) - 270
             self.geometry(f"+{max(20, px)}+{max(20, py)}")
         except Exception:
             pass
@@ -46,14 +50,18 @@ class InventoryDialog(ctk.CTkToplevel):
 
     def setup_ui(self) -> None:
         """Membangun layout antarmuka dialog inventaris."""
-        container = ctk.CTkFrame(
+        if self.container:
+            self.container.destroy()
+
+        self.container = ctk.CTkFrame(
             self,
             fg_color="#0F121C",
             border_color="#333A56",
             border_width=2,
             corner_radius=14
         )
-        container.pack(fill="both", expand=True, padx=14, pady=14)
+        self.container.pack(fill="both", expand=True, padx=14, pady=14)
+        container = self.container
 
         # Header Bar
         header = ctk.CTkFrame(container, fg_color="transparent")
@@ -200,3 +208,39 @@ class InventoryDialog(ctk.CTkToplevel):
             justify="left"
         )
         lbl_desc.pack(fill="x", pady=(2, 0))
+
+        # Tombol Gunakan untuk item Potion
+        if "potion" in item.name.lower() and self.player:
+            btn_use = ctk.CTkButton(
+                card,
+                text="Gunakan (+300 HP)",
+                width=135,
+                height=32,
+                fg_color="#10B981",
+                hover_color="#059669",
+                font=FONT_BOLD,
+                command=lambda it=item: self.use_item(it)
+            )
+            btn_use.pack(side="right", padx=10)
+
+    def use_item(self, item: Item) -> None:
+        """Menggunakan item dari tas (misal: Health Potion)."""
+        if not self.player:
+            return
+
+        if "potion" in item.name.lower():
+            if self.player.hp >= self.player.max_hp:
+                messagebox.showwarning("HP Penuh", f"HP {self.player.name} sudah penuh ({self.player.hp}/{self.player.max_hp})!")
+                return
+            if self.player.potions <= 0:
+                messagebox.showwarning("Potion Habis", "Stok Health Potion di tas sudah habis!")
+                return
+            healed = self.player.use_potion()
+            messagebox.showinfo(
+                "Memulihkan HP",
+                f"Meminum Health Potion!\nMemulihkan +{healed} HP.\nSisa HP: {self.player.hp}/{self.player.max_hp}\nSisa Potion: {self.player.potions}"
+            )
+            if self.on_use_callback:
+                self.on_use_callback()
+            self.items = self.player.inventory.get_all_items()
+            self.setup_ui()

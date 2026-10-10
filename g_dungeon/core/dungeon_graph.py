@@ -61,16 +61,16 @@ class DungeonGraph:
     def _populate_defaults(self) -> None:
         """Mendaftarkan 10 ruangan dan 13 edge resmi sesuai Bagian 2.4 dokumen perencanaan."""
         defaults = [
-            DungeonLocation(id=1, name="Entrance Hall", description="Titik awal pahlawan, ruangan gerbang yang aman dan sunyi.", event_type=RoomEvent.NONE, reward_desc="Area awal", ui_x=0.20, ui_y=0.25),
-            DungeonLocation(id=2, name="Whispering Forest", description="Hutan bisikan gaib tempat bertemunya Roh Pohon Kuno Gyoot.", event_type=RoomEvent.DIALOG_FOREST, reward_desc="Lore, Petunjuk, & 1 Potion", ui_x=0.48, ui_y=0.15),
-            DungeonLocation(id=3, name="Labyrinth Tower", description="Menara labirin menjulang berisi teka-teki 8-Puzzle Matriks kuno.", event_type=RoomEvent.PUZZLE_SLIDING, reward_desc="Fragmen Kristal 1 (+200 Max HP)", ui_x=0.76, ui_y=0.15),
-            DungeonLocation(id=4, name="The Eternal Relic", description="Ruangan altar suci bejana cairan kimia warna-warni (Stack LIFO).", event_type=RoomEvent.PUZZLE_STACK, reward_desc="Fragmen Kristal 2 (Kunci Boss)", ui_x=0.90, ui_y=0.42),
-            DungeonLocation(id=5, name="Village Workshop", description="Bengkel desa bawah tanah dengan ban berjalan pemilah logistik (Queue FIFO).", event_type=RoomEvent.QUEST_CONVEYOR, reward_desc="Fragmen Kristal 3 (+2 Potion)", ui_x=0.10, ui_y=0.75),
-            DungeonLocation(id=6, name="Ancient Armory", description="Gudang senjata berkarat dijaga prajurit kerangka kuno (Skeleton Guard).", event_type=RoomEvent.BATTLE, monster_name="Skeleton Guard", reward_desc="Harta 150 Gold + 1 Health Potion", ui_x=0.24, ui_y=0.52),
-            DungeonLocation(id=7, name="Crystal Cavern", description="Gua kristal berkilauan sarang lendir asam beracun (Crystal Slime).", event_type=RoomEvent.BATTLE, monster_name="Crystal Slime", reward_desc="Kristal Mana (Reset Cooldown Skill)", ui_x=0.68, ui_y=0.40),
-            DungeonLocation(id=8, name="Magma Forge", description="Tempaan magma membara markas raksasa batuan lahar (Magma Golem).", event_type=RoomEvent.BATTLE, monster_name="Magma Golem", reward_desc="DEF +15 Permanen", ui_x=0.52, ui_y=0.72),
-            DungeonLocation(id=9, name="Shadow Crypt", description="Kuburan bayangan dingin tempat bersarangnya arwah penjerit (Shadow Wraith).", event_type=RoomEvent.BATTLE, monster_name="Shadow Wraith", reward_desc="Petunjuk Letak Boss Lair", ui_x=0.35, ui_y=0.88),
-            DungeonLocation(id=10, name="Throne of Extinction", description="Singgasana kepunahan tempat bersemayamnya Corrupted Crystal Kaiju!", event_type=RoomEvent.BATTLE, monster_name="Corrupted Crystal Kaiju", is_boss_lair=True, reward_desc="Kemenangan Mutlak G-Dungeons!", ui_x=0.85, ui_y=0.82),
+            DungeonLocation(id=1, name="Entrance Hall", description="Titik awal pahlawan, ruangan gerbang yang aman dan sunyi.", event_type=RoomEvent.NONE, reward_desc="Area awal", ui_x=0.18, ui_y=0.24),
+            DungeonLocation(id=2, name="Whispering Forest", description="Hutan bisikan gaib tempat bertemunya Roh Pohon Kuno Gyoot.", event_type=RoomEvent.DIALOG_FOREST, reward_desc="Lore, Petunjuk, & 1 Potion", ui_x=0.48, ui_y=0.17),
+            DungeonLocation(id=3, name="Labyrinth Tower", description="Menara labirin menjulang berisi teka-teki 8-Puzzle Matriks kuno.", event_type=RoomEvent.PUZZLE_SLIDING, reward_desc="Fragmen Kristal 1 (+200 Max HP)", ui_x=0.78, ui_y=0.17),
+            DungeonLocation(id=4, name="The Eternal Relic", description="Ruangan altar suci bejana cairan kimia warna-warni (Stack LIFO).", event_type=RoomEvent.PUZZLE_STACK, reward_desc="Fragmen Kristal 2 (Kunci Boss)", ui_x=0.86, ui_y=0.44),
+            DungeonLocation(id=5, name="Village Workshop", description="Bengkel desa bawah tanah dengan ban berjalan pemilah logistik (Queue FIFO).", event_type=RoomEvent.QUEST_CONVEYOR, reward_desc="Fragmen Kristal 3 (+2 Potion)", ui_x=0.24, ui_y=0.58),
+            DungeonLocation(id=6, name="Ancient Armory", description="Gudang senjata berkarat dijaga prajurit kerangka kuno (Skeleton Guard).", event_type=RoomEvent.BATTLE, monster_name="Skeleton Guard", reward_desc="Harta 150 Gold + 1 Health Potion", ui_x=0.36, ui_y=0.40),
+            DungeonLocation(id=7, name="Crystal Cavern", description="Gua kristal berkilauan sarang lendir asam beracun (Crystal Slime).", event_type=RoomEvent.BATTLE, monster_name="Crystal Slime", reward_desc="Kristal Mana (Reset Cooldown Skill)", ui_x=0.60, ui_y=0.38),
+            DungeonLocation(id=8, name="Magma Forge", description="Tempaan magma membara markas raksasa batuan lahar (Magma Golem).", event_type=RoomEvent.BATTLE, monster_name="Magma Golem", reward_desc="DEF +15 Permanen", ui_x=0.54, ui_y=0.76),
+            DungeonLocation(id=9, name="Shadow Crypt", description="Kuburan bayangan dingin tempat bersarangnya arwah penjerit (Shadow Wraith).", event_type=RoomEvent.BATTLE, monster_name="Shadow Wraith", reward_desc="Petunjuk Letak Boss Lair", ui_x=0.10, ui_y=0.72),
+            DungeonLocation(id=10, name="Throne of Extinction", description="Singgasana kepunahan tempat bersemayamnya Corrupted Crystal Kaiju!", event_type=RoomEvent.BATTLE, monster_name="Corrupted Crystal Kaiju", is_boss_lair=True, reward_desc="Kemenangan Mutlak G-Dungeons!", ui_x=0.86, ui_y=0.76),
         ]
         for loc in defaults:
             self.add_location(loc)
