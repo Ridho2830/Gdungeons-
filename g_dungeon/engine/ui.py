@@ -3,7 +3,7 @@ Module: engine/ui.py
 Description: Komponen antarmuka pengguna (UI) PyGame yang responsif: Tombol, Progress Bar, Floating Text, Objective HUD, Log Box.
 """
 
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 import pygame
 from engine.assets import AssetManager
 from engine.audio import AudioManager

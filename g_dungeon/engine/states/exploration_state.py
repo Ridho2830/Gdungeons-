@@ -5,7 +5,7 @@ Menampilkan graf 10 ruangan bertema 2D Pixel RPG Fantasy, visualisasi Algoritma
 Dijkstra (Mage Map Vision), interaksi event ruangan, dan pelacak objektif di HUD.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 import math
 import pygame
 from engine.assets import AssetManager

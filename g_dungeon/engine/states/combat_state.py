@@ -5,7 +5,7 @@ Mengatur animasi PlayerEntity vs MonsterEntity, bar status HP/Defense/Rage,
 efek getaran layar (Screen Shake), teks melayang (Floating Text), dan logika Menang/Kalah.
 """
 
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 import random
 import pygame
 from engine.assets import AssetManager
