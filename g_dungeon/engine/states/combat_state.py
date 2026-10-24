@@ -173,10 +173,11 @@ class CombatState(GameState):
             y=260,
         )
 
+        # REVISI: Posisi monster digeser ke kanan dan sedikit ke bawah.
         self.monster_entity = MonsterEntity(
             self.current_monster,
-            x=780,
-            y=140,
+            x=850,
+            y=165,
         )
 
         self.player_hp_bar.set_value(
@@ -891,4 +892,3 @@ class CombatState(GameState):
 
         # Log dan teks damage.
         self.combat_log.render(surface)
-        self.floating_texts.render(surface)
