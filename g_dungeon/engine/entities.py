@@ -762,10 +762,17 @@ class MonsterEntity(GameObject):
         self.monster = monster_model
         self.assets = AssetManager.get_instance()
 
-        self.sprite = self.assets.get_monster_sprite(
-            self.monster.name,
-            size=(self.width, self.height),
-        )
+        # Pilih sprite sheet berdasarkan ruangan/monster, lalu animasikan 6 frame idle.
+        # Shadow Crypt tetap memakai data/AI Shadow Wraith, tetapi visualnya Frost.
+        self.idle_frames = self._load_monster_idle_frames()
+
+        if self.idle_frames:
+            self.sprite = self.idle_frames[0]
+        else:
+            self.sprite = self.assets.get_monster_sprite(
+                self.monster.name,
+                size=(self.width, self.height),
+            )
 
         self.current_state = "idle"
         self.state_timer = 0.0
@@ -777,6 +784,66 @@ class MonsterEntity(GameObject):
         self.attack_duration = 0.55
         self.ultimate_duration = 0.95
         self.death_duration = 1.6
+
+    
+    def _load_monster_idle_frames(self) -> List[pygame.Surface]:
+        """Memuat dan memotong enam frame idle dari sprite sheet monster."""
+        room_name = (getattr(self.monster, "room_name", "") or "").lower()
+        monster_name = (getattr(self.monster, "name", "") or "").lower()
+
+        # Ruangan diprioritaskan agar Shadow Wraith di Shadow Crypt tampil sebagai Frost.
+        if "ancient armory" in room_name or "skeleton" in monster_name:
+            filename = "idle_skeleton.png"
+        elif "shadow crypt" in room_name or "frost" in monster_name:
+            filename = "idle_frost.png"
+        elif "magma forge" in room_name or "magma" in monster_name or "golem" in monster_name:
+            filename = "idle_magma.png"
+        elif "crystal cavern" in room_name or "slime" in monster_name:
+            filename = "idle_slime.png"
+        elif "throne of extinction" in room_name or "kaiju" in monster_name or "godzilla" in monster_name:
+            filename = "idle_godzilla.png"
+        else:
+            return []
+
+        sheet = self.assets.get_image(filename)
+        sheet_width, sheet_height = sheet.get_size()
+        if sheet_width < 6 or sheet_height < 1:
+            return []
+
+        frames: List[pygame.Surface] = []
+        for i in range(6):
+            x0 = round(i * sheet_width / 6)
+            x1 = round((i + 1) * sheet_width / 6)
+            cell = sheet.subsurface(
+                pygame.Rect(x0, 0, x1 - x0, sheet_height)
+            ).copy()
+
+            # Potong transparansi di sekeliling monster agar karakter terlihat besar.
+            bounds = cell.get_bounding_rect(min_alpha=8)
+            if bounds.width <= 0 or bounds.height <= 0:
+                continue
+            cropped = cell.subsurface(bounds).copy()
+
+            # Pertahankan proporsi, sisakan sedikit ruang di dalam kanvas combat.
+            scale = min(
+                250 / max(1, cropped.get_width()),
+                265 / max(1, cropped.get_height()),
+            )
+            new_size = (
+                max(1, round(cropped.get_width() * scale)),
+                max(1, round(cropped.get_height() * scale)),
+            )
+            scaled = pygame.transform.scale(cropped, new_size)
+
+            canvas = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+            canvas.blit(
+                scaled,
+                ((self.width - new_size[0]) // 2,
+                 self.height - new_size[1]),
+            )
+            frames.append(canvas)
+
+        return frames
 
     def trigger_idle(self) -> None:
         if self.monster.is_alive:
@@ -1030,6 +1097,20 @@ class MonsterEntity(GameObject):
     def render(self, surface: pygame.Surface) -> None:
         x = self.rect.x + self.shake_offset[0]
         y = self.rect.y + self.shake_offset[1]
+        
+        # Animasi idle Skeleton Guard: 6 frame, 5 FPS.
+        display_sprite = self.sprite
+
+        if (
+            self.idle_frames
+            and self.current_state == "idle"
+            and self.hurt_timer <= 0
+            and self.monster.is_alive
+        ):
+            frame_index = int(self.time_counter * 5) % len(
+                self.idle_frames
+            )
+            display_sprite = self.idle_frames[frame_index]
 
         # Monster bergerak maju ketika menyerang.
         if (
@@ -1084,7 +1165,7 @@ class MonsterEntity(GameObject):
             )
             surface.blit(flash, (x, y))
         else:
-            surface.blit(self.sprite, (x, y))
+            surface.blit(display_sprite, (x, y))
 
         self._render_attack_effect(surface, x, y)
         self._render_ultimate(surface, x, y)

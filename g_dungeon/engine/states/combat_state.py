@@ -800,11 +800,32 @@ class CombatState(GameState):
                 int(self.screen_shake_amount),
             )
 
+        
+        background_by_monster = {
+            "Magma Golem": "magma_arena_bg.png",
+            "Shadow Wraith": "shadow_arena_bg.png",
+            "Skeleton Guard": "ancient_arena_bg.png",
+            "Crystal Slime": "crystal_arena_bg.png",
+        }
+
+        monster_name = (
+            self.current_monster.name
+            if self.current_monster
+            else ""
+        )
+
+        background_file = background_by_monster.get(
+            monster_name,
+            "dungeon_map_bg.png",
+        )
+
         background = self.assets.get_image(
-            "combat_arena_bg.png",
+            background_file,
             scale=(SCREEN_WIDTH, SCREEN_HEIGHT),
         )
+
         surface.blit(background, (offset_x, offset_y))
+
 
         bottom_overlay = pygame.Surface(
             (SCREEN_WIDTH, 240), pygame.SRCALPHA

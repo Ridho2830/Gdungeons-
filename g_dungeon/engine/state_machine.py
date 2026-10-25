@@ -4,7 +4,7 @@ Description: Arsitektur Finite State Machine (FSM) untuk pengelolaan transisi an
 Memenuhi kriteria Rubrik Teknis: 'Manajemen State'.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import pygame
 
 

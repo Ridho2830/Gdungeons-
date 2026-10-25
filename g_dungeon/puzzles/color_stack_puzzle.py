@@ -3,8 +3,8 @@ Module: puzzles/color_stack_puzzle.py
 Description: Logika Puzzle Sortir Warna / Bejana Tabung (Stack LIFO) untuk The Eternal Relic.
 """
 
+import random
 from typing import List, Optional, Tuple
-
 
 class ColorStackPuzzle:
     """
@@ -22,29 +22,49 @@ class ColorStackPuzzle:
         "Yellow": "#f59e0b",
     }
 
+    
     def __init__(self) -> None:
-        # Inisialisasi awal 4 tabung sesuai game aslinya (puzzle2.java)
-        # Tabung 1: Blue, Red, Green
-        # Tabung 2: Blue, Green, Red
-        # Tabung 3: Green, Blue
-        # Tabung 4: Red
-        self.tubes: List[List[str]] = [
-            ["Blue", "Red", "Green"],
-            ["Blue", "Green", "Red"],
-            ["Green", "Blue"],
-            ["Red"],
-        ]
+        self.tubes: List[List[str]] = []
         self.move_count: int = 0
         self.selected_tube: Optional[int] = None
+        self.reset()
 
+    
     def reset(self) -> None:
-        """Mengembalikan susunan tabung ke konfigurasi awal."""
-        self.tubes = [
-            ["Blue", "Red", "Green"],
-            ["Blue", "Green", "Red"],
-            ["Green", "Blue"],
-            ["Red"],
-        ]
+        """Acak puzzle tanpa warna sama yang berdampingan."""
+
+        colors = (
+            ["Red"] * 3
+            + ["Blue"] * 3
+            + ["Green"] * 3
+        )
+
+        while True:
+            random.shuffle(colors)
+
+            # Bagi 9 warna menjadi 3 tabung,
+            # masing-masing berisi 3 warna.
+            tubes = [
+                colors[0:3].copy(),
+                colors[3:6].copy(),
+                colors[6:9].copy(),
+                [],
+            ]
+
+            # Tolak susunan jika ada dua warna
+            # sama yang berdampingan dalam tabung.
+            valid = all(
+                all(
+                    tube[i] != tube[i + 1]
+                    for i in range(len(tube) - 1)
+                )
+                for tube in tubes
+            )
+
+            if valid:
+                self.tubes = tubes
+                break
+
         self.move_count = 0
         self.selected_tube = None
 
@@ -58,37 +78,56 @@ class ColorStackPuzzle:
             return self.tubes[tube_idx][-1]
         return None
 
+    
     def can_pour(self, source_idx: int, target_idx: int) -> bool:
-        """
-        Memeriksa apakah warna teratas tabung sumber dapat dituang ke tabung target.
-        Syarat:
-        1. Tabung sumber tidak kosong.
-        2. Sumber dan target tidak sama.
-        3. Tabung target belum penuh (kurang dari MAX_CAPACITY).
-        4. Tabung target kosong ATAU warna teratas target sama dengan warna teratas sumber.
-        """
+        """Boleh menuang ke tabung mana pun yang masih memiliki ruang."""
+
         if source_idx == target_idx:
             return False
+
         if not self.tubes[source_idx]:
             return False
+
         if len(self.tubes[target_idx]) >= self.MAX_CAPACITY:
             return False
 
-        color_to_move = self.peek(source_idx)
-        target_top = self.peek(target_idx)
-
-        return target_top is None or target_top == color_to_move
+        # Warna berbeda tetap boleh dituang.
+        return True
 
     def pour(self, source_idx: int, target_idx: int) -> bool:
         """
-        Menuangkan satu blok warna dari tabung sumber ke target (Stack Pop -> Push).
-        Mengembalikan True jika aksi berhasil.
+        Menuangkan kelompok warna teratas.
+        Warna yang sama dan berdampingan bergerak bersama,
+        sebanyak yang dapat ditampung tabung tujuan.
         """
+
         if not self.can_pour(source_idx, target_idx):
             return False
 
-        color = self.tubes[source_idx].pop()
-        self.tubes[target_idx].append(color)
+        source = self.tubes[source_idx]
+        target = self.tubes[target_idx]
+
+        # Ambil warna paling atas.
+        color = source[-1]
+
+        # Hitung berapa blok dengan warna sama
+        # yang berdampingan di bagian paling atas.
+        group_count = 0
+        for block in reversed(source):
+            if block == color:
+                group_count += 1
+            else:
+                break
+
+        # Hitung kapasitas tabung tujuan yang tersisa.
+        free_space = self.MAX_CAPACITY - len(target)
+
+        # Pindahkan sebanyak yang muat.
+        amount = min(group_count, free_space)
+
+        for _ in range(amount):
+            target.append(source.pop())
+
         self.move_count += 1
         return True
 
