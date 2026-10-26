@@ -23,7 +23,11 @@ from engine.constants import (
     STATE_END,
     STATE_EXPLORATION,
 )
-from engine.entities import MonsterEntity, PlayerEntity
+from engine.entities import (
+    MonsterProjectile,
+    MonsterEntity,
+    PlayerEntity,
+)
 from engine.state_machine import GameState
 from engine.ui import FloatingTextManager, LogBox, UIButton, UIProgressBar
 from core.monster import Monster
@@ -97,6 +101,15 @@ class CombatState(GameState):
 
         # Mencegah lompatan dipicu berulang selama SPACE ditahan.
         self._space_was_down = False
+
+        # Serangan proyektil monster: pemain bebas bergerak/menangkis
+        # selama giliran monster berlangsung (real-time).
+        self.reaction_active = False
+        self.reaction_timer = 0.0
+        self.reaction_end_delay = 0.0
+        self.pending_attack: Optional[dict] = None
+        self.projectiles: List[MonsterProjectile] = []
+        self.show_hitboxes = False  # tekan F3 untuk debug hitbox
 
     def _init_buttons(self) -> None:
         btn_w, btn_h = 160, 44
@@ -206,6 +219,12 @@ class CombatState(GameState):
         self.turn_count = 1
         self.victory_pending = False
         self._space_was_down = False
+
+        self.reaction_active = False
+        self.reaction_timer = 0.0
+        self.reaction_end_delay = 0.0
+        self.pending_attack = None
+        self.projectiles.clear()
 
         self.combat_log.messages.clear()
         self.combat_log.add_message(
@@ -464,6 +483,16 @@ class CombatState(GameState):
         monster = self.current_monster
         action_type, raw_dmg, desc = monster.decide_action(self.turn_count)
 
+        # Monster dengan profil serangan proyektil (lihat MONSTER_ATTACK_PROFILES
+        # di entities.py): serangan bisa dihindari atau ditangkis. Jika gambar
+        # belum ada, otomatis memakai serangan instan di bawah.
+        if (
+            self.monster_entity
+            and self.monster_entity.supports_projectile_action(action_type)
+            and self._begin_projectile_attack(action_type, raw_dmg, desc)
+        ):
+            return
+
         if action_type == "ultimate":
             if self.monster_entity:
                 self.monster_entity.trigger_ultimate()
@@ -576,6 +605,17 @@ class CombatState(GameState):
                 f"(Shield menyerap {absorbed})."
             )
 
+        self._finish_monster_turn()
+
+    def _finish_monster_turn(self) -> None:
+        """Penutup giliran monster: cek kalah, cooldown, ronde berikutnya."""
+
+        if not self.current_monster or not self.game.state_mgr:
+            return
+
+        player = self.game.state_mgr.player
+        monster = self.current_monster
+
         if not player.is_alive:
             self._handle_defeat()
             return
@@ -608,6 +648,240 @@ class CombatState(GameState):
 
         self.is_player_turn = True
         self.defending = False
+
+    # ------------------------------------------------------------------
+    # Serangan proyektil monster (menghindar / menangkis)
+    # ------------------------------------------------------------------
+    def _begin_projectile_attack(
+        self,
+        action_type: str,
+        raw_dmg: int,
+        desc: str,
+    ) -> bool:
+        """Mulai serangan proyektil. False jika monster ini tidak punya animasinya."""
+
+        if not self.monster_entity or not self.player_entity:
+            return False
+
+        if not self.monster_entity.trigger_projectile_attack():
+            return False
+
+        self.pending_attack = {
+            "type": action_type,
+            "damage": raw_dmg,
+            "desc": desc,
+            "projectile": None,
+            "resolved": False,
+        }
+        self.reaction_active = True
+        self.reaction_timer = 0.0
+        self.reaction_end_delay = 0.0
+        self.projectiles.clear()
+
+        self.combat_log.add_message(
+            "[!] Serangan datang! Hindari (WASD/SPACE) "
+            "atau tangkis (F)!"
+        )
+        return True
+
+    def _update_projectile_attack(self, dt: float) -> None:
+        """Peluncuran, gerakan, tabrakan, dan penutupan serangan proyektil."""
+
+        attack = self.pending_attack
+
+        if (
+            attack is None
+            or not self.monster_entity
+            or not self.player_entity
+            or not self.current_monster
+        ):
+            self._end_projectile_attack()
+            return
+
+        self.reaction_timer += dt
+        projectile: Optional[MonsterProjectile] = attack["projectile"]
+
+        # 1. Frame ke-4: proyektil muncul di ujung kiri frame serangan
+        #    dan meluncur ke titik tempat pemain berdiri saat ini.
+        if projectile is None:
+            spawn = self.monster_entity.pop_projectile_launch()
+
+            if spawn is not None:
+                hurtbox = self.player_entity.get_hurtbox()
+                target = (hurtbox.centerx, hurtbox.bottom - 30)
+                speed = self.monster_entity.projectile_speed * (
+                    1.25 if self.current_monster.enraged else 1.0
+                )
+
+                projectile = MonsterProjectile(
+                    self.monster_entity.projectile_frames,
+                    spawn,
+                    target,
+                    speed,
+                    self.monster_entity.attack_profile,
+                )
+                attack["projectile"] = projectile
+                self.projectiles.append(projectile)
+                self.audio.play("magic")
+
+        # 2. Gerakkan proyektil dan periksa tabrakan.
+        else:
+            projectile.update(dt)
+
+            if projectile.is_flying:
+                self._check_projectile_collision(projectile)
+
+            if projectile.outcome == "missed" and not attack["resolved"]:
+                attack["resolved"] = True
+                self._on_projectile_missed()
+
+        # 3. Akhiri giliran setelah animasi dan proyektil selesai.
+        animation_done = self.monster_entity.current_state != "ranged_attack"
+
+        if projectile is not None and projectile.is_done and animation_done:
+            self.reaction_end_delay += dt
+            if self.reaction_end_delay >= 0.35:
+                self._end_projectile_attack()
+                return
+
+        # Pengaman agar giliran tidak pernah macet.
+        if self.reaction_timer > 8.0:
+            if not attack["resolved"]:
+                self._on_projectile_missed()
+            self._end_projectile_attack()
+
+    def _check_projectile_collision(self, projectile: MonsterProjectile) -> None:
+        if not self.player_entity or not self.pending_attack:
+            return
+
+        hitbox = projectile.get_hitbox()
+        hurtbox = self.player_entity.get_hurtbox()
+
+        # Jendela tangkis aktif: perisai sedikit lebih lebar dari tubuh.
+        if self.player_entity.guard_window > 0 and hitbox.colliderect(
+            hurtbox.inflate(40, 24)
+        ):
+            projectile.impact("parried")
+            self.pending_attack["resolved"] = True
+            self._on_projectile_parried()
+            return
+
+        if hitbox.colliderect(hurtbox):
+            projectile.impact("hit")
+            self.pending_attack["resolved"] = True
+            self._on_projectile_hit()
+
+    def _player_text_anchor(self) -> Tuple[int, int]:
+        if not self.player_entity:
+            return 200, 260
+
+        hurtbox = self.player_entity.get_hurtbox()
+        return hurtbox.centerx - 30, hurtbox.top - 10
+
+    def _on_projectile_hit(self) -> None:
+        if (
+            not self.current_monster
+            or not self.game.state_mgr
+            or not self.pending_attack
+        ):
+            return
+
+        player = self.game.state_mgr.player
+        monster = self.current_monster
+        attack = self.pending_attack
+        action = attack["type"]
+        text_x, text_y = self._player_text_anchor()
+
+        absorbed, dmg_hp = player.take_damage(attack["damage"])
+
+        self.audio.play("hit")
+
+        if action == "heavy_slam":
+            self._trigger_shake(14.0, 0.45)
+            self.floating_texts.add(
+                "HANTAMAN BERAT!", text_x - 40, text_y - 30, COLOR_RAGE_ORANGE
+            )
+        else:
+            self._trigger_shake(8.0, 0.25)
+
+        if self.player_entity:
+            self.player_entity.trigger_hurt()
+
+        if dmg_hp > 0:
+            self.floating_texts.add(
+                f"-{dmg_hp} HP", text_x, text_y, COLOR_HP_RED
+            )
+
+        if absorbed > 0:
+            self.floating_texts.add(
+                f"Shield -{absorbed}",
+                text_x,
+                text_y + 28,
+                COLOR_DEFENSE_BLUE,
+            )
+
+        if action == "lifesteal":
+            healed = int(dmg_hp * 0.3)
+            monster.hp = min(monster.max_hp, monster.hp + healed)
+
+            self.floating_texts.add(
+                f"+{healed} DRAIN", 920, 220, (180, 80, 255)
+            )
+            self.combat_log.add_message(
+                f"[>] {monster.name} menggunakan {attack['desc']}! "
+                f"({dmg_hp} DMG, memulihkan +{healed} HP)!"
+            )
+        elif action == "heavy_slam":
+            self.combat_log.add_message(
+                f"[>] {monster.name} melancarkan {attack['desc']}! "
+                f"Mengakibatkan {dmg_hp} HP DMG!"
+            )
+        else:
+            self.combat_log.add_message(
+                f"[>] {monster.name} menyerang ({attack['desc']})! "
+                f"Menghasilkan {dmg_hp} HP damage "
+                f"(Shield menyerap {absorbed})."
+            )
+
+    def _on_projectile_parried(self) -> None:
+        if not self.game.state_mgr:
+            return
+
+        player = self.game.state_mgr.player
+        text_x, text_y = self._player_text_anchor()
+
+        self.audio.play("attack")
+        self.audio.play("click")
+        self._trigger_shake(4.0, 0.15)
+
+        self.floating_texts.add("TANGKIS!", text_x, text_y, COLOR_GOLD)
+        self.combat_log.add_message(
+            f"[#] {player.name} menangkis serangan tepat waktu! "
+            f"Tidak ada damage."
+        )
+
+    def _on_projectile_missed(self) -> None:
+        if not self.game.state_mgr:
+            return
+
+        player = self.game.state_mgr.player
+        text_x, text_y = self._player_text_anchor()
+
+        self.floating_texts.add(
+            "MENGHINDAR!", text_x - 10, text_y, (140, 220, 255)
+        )
+        self.combat_log.add_message(
+            f"[~] {player.name} berhasil menghindari serangan!"
+        )
+
+        if self.pending_attack:
+            self.pending_attack["resolved"] = True
+
+    def _end_projectile_attack(self) -> None:
+        self.reaction_active = False
+        self.pending_attack = None
+        self.projectiles.clear()
+        self._finish_monster_turn()
 
     def _handle_victory(self) -> None:
         self.audio.play("victory")
@@ -687,6 +961,26 @@ class CombatState(GameState):
         return None
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        # Debug: tampilkan hitbox pemain dan proyektil.
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_F3:
+            self.show_hitboxes = not self.show_hitboxes
+            return
+
+        # Saat serangan proyektil berlangsung: lompat (SPACE) dan tangkis (F / klik kanan).
+        if self.reaction_active:
+            if not self.player_entity:
+                return
+
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                self.player_entity.trigger_jump()
+            elif (
+                event.type == pygame.KEYDOWN and event.key == pygame.K_f
+            ) or (
+                event.type == pygame.MOUSEBUTTONDOWN and event.button == 3
+            ):
+                self.player_entity.trigger_guard()
+            return
+
         if not self.is_player_turn or self.victory_pending:
             return
 
@@ -718,7 +1012,7 @@ class CombatState(GameState):
         # Gerakan dan lompatan tidak menghabiskan giliran.
         if (
             self.player_entity
-            and self.is_player_turn
+            and (self.is_player_turn or self.reaction_active)
             and not self.victory_pending
         ):
             keys = pygame.key.get_pressed()
@@ -731,6 +1025,9 @@ class CombatState(GameState):
 
         if self.monster_entity:
             self.monster_entity.update(dt)
+
+        if self.reaction_active:
+            self._update_projectile_attack(dt)
 
         self.floating_texts.update(dt)
 
@@ -776,6 +1073,7 @@ class CombatState(GameState):
         # Jalankan giliran monster setelah jeda.
         if (
             not self.is_player_turn
+            and not self.reaction_active
             and not self.victory_pending
             and self.current_monster
             and self.current_monster.is_alive
@@ -891,6 +1189,13 @@ class CombatState(GameState):
         if self.monster_entity:
             self.monster_entity.render(surface)
 
+        # Proyektil di atas pemain dan monster.
+        for projectile in self.projectiles:
+            projectile.render(surface)
+
+        if self.show_hitboxes:
+            self._render_hitboxes(surface)
+
         # Bar status.
         self.player_hp_bar.render(surface)
         self.player_def_bar.render(surface)
@@ -900,7 +1205,8 @@ class CombatState(GameState):
         # Tombol aksi.
         monster_acting = bool(
             self.monster_entity
-            and self.monster_entity.current_state in ("attack", "ultimate")
+            and self.monster_entity.current_state
+            in ("attack", "ultimate", "ranged_attack")
         )
 
         for button in self.buttons:
@@ -911,5 +1217,58 @@ class CombatState(GameState):
             )
             button.render(surface)
 
+        if self.reaction_active:
+            self._render_reaction_hint(surface)
+
         # Log dan teks damage.
         self.combat_log.render(surface)
+        self.floating_texts.render(surface)
+
+    def _render_reaction_hint(self, surface: pygame.Surface) -> None:
+        """Petunjuk kontrol singkat selama serangan proyektil berlangsung."""
+
+        font = self.assets.get_font(16, bold=True)
+        ready = bool(
+            self.player_entity and self.player_entity.guard_cooldown <= 0
+        )
+
+        parts = [
+            ("GERAK: WASD", COLOR_TEXT_WHITE),
+            ("LOMPAT: SPACE", COLOR_TEXT_WHITE),
+            (
+                "TANGKIS: F / Klik Kanan" if ready else "TANGKIS: ...",
+                COLOR_GOLD if ready else COLOR_TEXT_MUTED,
+            ),
+        ]
+        rendered = [font.render(text, True, color) for text, color in parts]
+        gap = 28
+        total = sum(r.get_width() for r in rendered) + gap * (len(rendered) - 1)
+
+        panel = pygame.Surface((total + 32, 34), pygame.SRCALPHA)
+        panel.fill((15, 12, 22, 200))
+        pygame.draw.rect(
+            panel, COLOR_PANEL_BORDER, panel.get_rect(), width=2
+        )
+
+        px = (SCREEN_WIDTH - panel.get_width()) // 2
+        surface.blit(panel, (px, 22))
+
+        x = px + 16
+        for r in rendered:
+            surface.blit(r, (x, 22 + (34 - r.get_height()) // 2))
+            x += r.get_width() + gap
+
+    def _render_hitboxes(self, surface: pygame.Surface) -> None:
+        if self.player_entity:
+            pygame.draw.rect(
+                surface, (60, 255, 90), self.player_entity.get_hurtbox(), 2
+            )
+
+        for projectile in self.projectiles:
+            pygame.draw.rect(surface, (255, 60, 60), projectile.get_hitbox(), 2)
+            pygame.draw.circle(
+                surface,
+                (255, 255, 0),
+                (int(projectile.target[0]), int(projectile.target[1])),
+                5,
+            )

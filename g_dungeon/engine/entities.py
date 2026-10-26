@@ -1,5 +1,6 @@
 """Entitas visual, animasi, dan efek pertarungan G-Dungeons."""
 
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 import math
 import os
@@ -9,6 +10,113 @@ from engine.assets import AssetManager
 from engine.constants import SCREEN_WIDTH, SCREEN_HEIGHT
 from core.player import Player, PlayerRole
 from core.monster import Monster
+
+
+# ---------------------------------------------------------------------------
+# Konfigurasi tangkis pemain.
+# ---------------------------------------------------------------------------
+GUARD_WINDOW = 0.35             # lama jendela tangkis (detik)
+GUARD_LOCK = 0.45               # lama pemain tertahan saat bertahan
+GUARD_COOLDOWN = 0.90           # jeda sebelum bisa menangkis lagi
+
+
+@dataclass(frozen=True)
+class AttackProfile:
+    """Data serangan proyektil satu monster (animasi + objek yang meluncur).
+
+    Menambah monster baru cukup dengan menambah satu entri di
+    MONSTER_ATTACK_PROFILES. Jika file gambar belum ada, monster otomatis
+    memakai serangan lama (damage instan) tanpa error.
+    """
+
+    attack_file: str                     # sprite sheet animasi menyerang
+    projectile_file: str                 # sprite sheet objek serangan
+    actions: Tuple[str, ...] = ("attack",)  # aksi AI yang memakai proyektil
+
+    # Jumlah frame; None = deteksi otomatis lewat kolom kosong di sheet.
+    attack_frames: Optional[int] = None
+    projectile_frames: Optional[int] = None
+
+    launch_frame: int = 3                # indeks frame (0-based) proyektil muncul
+    attack_fps: float = 8.0
+    hold: float = 0.25                   # jeda setelah frame terakhir
+
+    projectile_fps: float = 12.0
+    projectile_height: int = 130         # tinggi sprite proyektil di layar (px)
+    projectile_speed: float = 380.0      # px/detik (rage mode x1.25)
+    flip_projectile: bool = False        # True bila gambar aslinya menghadap kanan
+    projectile_align: str = "center"     # "center" atau "lead" (sisi depan di kiri)
+
+    # Hitbox proyektil sebagai pecahan ukuran sprite.
+    hitbox_w: float = 0.50
+    hitbox_h: float = 0.45
+    hitbox_left: Optional[float] = None  # None = di tengah; 0.04 = di sisi depan
+
+    # Titik muncul di frame peluncuran: tepi kiri badan, tinggi relatif bbox.
+    spawn_y_ratio: float = 0.5           # 0 = atas, 1 = bawah
+    spawn_y_offset: int = 0
+
+    # Penjajaran frame serangan terhadap idle: "center" atau "right".
+    attack_align: str = "center"
+
+    # Radius pencarian garis potong antar-frame (jika jumlah frame diisi).
+    attack_split_radius: int = 90
+    projectile_split_radius: int = 60
+
+
+# Kunci = nama file sprite idle monster.
+MONSTER_ATTACK_PROFILES: Dict[str, AttackProfile] = {
+    # Shadow Wraith (visual Frost): tebasan es dari ujung pedang.
+    "idle_frost.png": AttackProfile(
+        attack_file="attack_frost.png",
+        projectile_file="object_acttack_frost.png",  # nama file asli (typo)
+        actions=("attack", "lifesteal"),
+        attack_frames=6,
+        projectile_frames=4,
+        launch_frame=3,
+        projectile_align="lead",
+        hitbox_left=0.04,
+        spawn_y_ratio=1.0,
+        spawn_y_offset=-18,
+        attack_align="right",
+    ),
+    # Skeleton Guard: jumlah frame dideteksi otomatis.
+    "idle_skeleton.png": AttackProfile(
+        attack_file="attack_skeleton.png",
+        projectile_file="object_attack_skeleton.png",
+        actions=("attack",),
+        launch_frame=3,
+        projectile_height=110,
+        projectile_speed=400.0,
+    ),
+    # Crystal Slime: semburan asam.
+    "idle_slime.png": AttackProfile(
+        attack_file="attack_slime.png",
+        projectile_file="object_attack_slime.png",
+        actions=("attack",),
+        launch_frame=2,
+        projectile_height=90,
+        projectile_speed=340.0,
+    ),
+    # Magma Golem: bola lava; Hantaman Berat juga memakai proyektil.
+    "idle_magma.png": AttackProfile(
+        attack_file="attack_magma.png",
+        projectile_file="object_attack_magma.png",
+        actions=("attack", "heavy_slam"),
+        launch_frame=3,
+        projectile_height=140,
+        projectile_speed=330.0,
+    ),
+    # Corrupted Crystal Kaiju (Boss): serangan biasa; Atomic Breath tetap sinar.
+    "idle_godzilla.png": AttackProfile(
+        attack_file="attack_godzilla.png",
+        projectile_file="object_attack_godzilla.png",
+        actions=("attack",),
+        launch_frame=3,
+        projectile_height=150,
+        projectile_speed=420.0,
+    ),
+}
 
 
 class GameObject:
@@ -175,6 +283,11 @@ class PlayerEntity(GameObject):
         # Efek visual Mage.
         self.projectile_color = (80, 190, 255)
         self.projectile_radius = 10
+
+        # Tangkis (parry) terhadap proyektil musuh.
+        self.guard_window = 0.0
+        self.guard_cooldown = 0.0
+        self._idle_bounds: Optional[pygame.Rect] = None
 
     def _load_sheet(
         self,
@@ -422,6 +535,94 @@ class PlayerEntity(GameObject):
                 fps=10.0,
             )
 
+    def trigger_guard(self) -> bool:
+        """Angkat pertahanan untuk menangkis proyektil (jendela singkat)."""
+
+        if not self.player.is_alive:
+            return False
+
+        if (
+            self.guard_cooldown > 0
+            or not self.grounded
+            or self.hurt_timer > 0
+            or self.attack_timer > 0
+        ):
+            return False
+
+        # Selalu menghadap musuh (monster berada di sisi kanan arena).
+        self.facing_right = True
+        self.anim_sprite.flip_x = False
+
+        self.guard_window = GUARD_WINDOW
+        self.guard_cooldown = GUARD_COOLDOWN
+        self.defend_timer = GUARD_LOCK
+        self.move_state = "idle"
+
+        if self.anim_sprite.animations.get("defend"):
+            self.anim_sprite.restart("defend", loop=False, fps=10.0)
+
+        return True
+
+    def get_hurtbox(self) -> pygame.Rect:
+        """Kotak tabrakan pemain (lebih kecil dari kanvas sprite)."""
+
+        frames = self.anim_sprite.animations.get("idle") or []
+
+        if self._idle_bounds is None:
+            if frames:
+                bounds = frames[0].get_bounding_rect(min_alpha=40)
+                if bounds.width <= 0 or bounds.height <= 0:
+                    bounds = pygame.Rect(0, 0, *frames[0].get_size())
+                self._idle_bounds = bounds
+            else:
+                self._idle_bounds = pygame.Rect(
+                    0, 0, self.width, self.height
+                )
+
+        bounds = self._idle_bounds.copy()
+
+        if self.anim_sprite.flip_x and frames:
+            bounds.x = frames[0].get_width() - bounds.right
+
+        # Persempit sisi kiri-kanan dan atas; kaki tetap sebagai acuan.
+        shrink_x = int(bounds.width * 0.30)
+        shrink_top = int(bounds.height * 0.10)
+
+        left = int(self.x + bounds.x + shrink_x // 2)
+        top = int(self.y - self.jump_height + bounds.y + shrink_top)
+
+        return pygame.Rect(
+            left,
+            top,
+            max(8, bounds.width - shrink_x),
+            max(8, bounds.height - shrink_top),
+        )
+
+    def _render_guard_effect(self, surface: pygame.Surface) -> None:
+        """Perisai cahaya di depan pemain selama jendela tangkis aktif."""
+
+        if self.guard_window <= 0:
+            return
+
+        hurtbox = self.get_hurtbox()
+        strength = max(0.0, min(1.0, self.guard_window / GUARD_WINDOW))
+
+        half_h = max(60, hurtbox.height // 2 + 22)
+        layer = pygame.Surface((64, half_h * 2 + 8), pygame.SRCALPHA)
+
+        shield_rect = pygame.Rect(2, 4, 56, half_h * 2)
+        pygame.draw.ellipse(
+            layer, (90, 180, 255, int(70 * strength) + 30), shield_rect
+        )
+        pygame.draw.ellipse(
+            layer, (200, 240, 255, int(220 * strength) + 30), shield_rect, 4
+        )
+
+        surface.blit(
+            layer,
+            (hurtbox.right - 6, hurtbox.centery - layer.get_height() // 2),
+        )
+
     def handle_movement(
         self,
         keys: pygame.key.ScancodeWrapper,
@@ -532,6 +733,12 @@ class PlayerEntity(GameObject):
                 0.0,
                 self.defend_timer - dt,
             )
+
+        if self.guard_window > 0:
+            self.guard_window = max(0.0, self.guard_window - dt)
+
+        if self.guard_cooldown > 0:
+            self.guard_cooldown = max(0.0, self.guard_cooldown - dt)
 
         # Fisika lompatan.
         if not self.grounded:
@@ -743,6 +950,9 @@ class PlayerEntity(GameObject):
             if self.player.role == PlayerRole.MAGE:
                 self._render_mage_projectile(surface)
 
+            # Efek perisai saat menangkis.
+            self._render_guard_effect(surface)
+
         finally:
             self.anim_sprite.rect = original_rect
 
@@ -762,9 +972,20 @@ class MonsterEntity(GameObject):
         self.monster = monster_model
         self.assets = AssetManager.get_instance()
 
+        # Data serangan proyektil (diisi bila profil + gambar tersedia).
+        self.idle_filename = ""
+        self.attack_profile: Optional[AttackProfile] = None
+        self.attack_frames: List[pygame.Surface] = []
+        self.attack_bounds: List[pygame.Rect] = []
+        self.projectile_frames: List[pygame.Surface] = []
+        self.attack_time = 0.0
+        self.projectile_launched = False
+
         # Pilih sprite sheet berdasarkan ruangan/monster, lalu animasikan 6 frame idle.
         # Shadow Crypt tetap memakai data/AI Shadow Wraith, tetapi visualnya Frost.
         self.idle_frames = self._load_monster_idle_frames()
+
+        self._load_attack_assets()
 
         if self.idle_frames:
             self.sprite = self.idle_frames[0]
@@ -804,6 +1025,9 @@ class MonsterEntity(GameObject):
             filename = "idle_godzilla.png"
         else:
             return []
+
+        self.idle_filename = filename
+        self.attack_profile = MONSTER_ATTACK_PROFILES.get(filename)
 
         sheet = self.assets.get_image(filename)
         sheet_width, sheet_height = sheet.get_size()
@@ -845,6 +1069,300 @@ class MonsterEntity(GameObject):
 
         return frames
 
+    # ------------------------------------------------------------------
+    # Serangan proyektil (animasi menyerang + objek yang meluncur)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _split_sheet(
+        sheet: pygame.Surface,
+        count: int,
+        radius: int,
+    ) -> List[int]:
+        """Cari garis potong antar-frame pada kolom paling kosong."""
+
+        width, height = sheet.get_size()
+        mask = pygame.mask.from_surface(sheet, 20)
+        strip = pygame.mask.Mask((1, height), fill=True)
+
+        cuts = [0]
+        for k in range(1, count):
+            guess = round(k * width / count)
+            low = max(cuts[-1] + 1, guess - radius)
+            high = min(width - 1, guess + radius)
+
+            best_x, best_value = guess, None
+            for x in range(low, high + 1):
+                value = mask.overlap_area(strip, (x, 0))
+                if best_value is None or value < best_value:
+                    best_x, best_value = x, value
+
+            cuts.append(best_x)
+
+        cuts.append(width)
+        return cuts
+
+    @staticmethod
+    def _auto_cuts(sheet: pygame.Surface) -> List[int]:
+        """Deteksi frame otomatis: kelompok kolom berisi yang dipisah celah kosong."""
+
+        width, height = sheet.get_size()
+        mask = pygame.mask.from_surface(sheet, 20)
+        strip = pygame.mask.Mask((1, height), fill=True)
+
+        runs: List[Tuple[int, int]] = []
+        start: Optional[int] = None
+        last = 0
+        gap = 0
+
+        for x in range(width):
+            if mask.overlap_area(strip, (x, 0)) > 0:
+                if start is None:
+                    start = x
+                last = x
+                gap = 0
+            elif start is not None:
+                gap += 1
+                if gap >= 6:
+                    runs.append((start, last + 1))
+                    start = None
+
+        if start is not None:
+            runs.append((start, last + 1))
+
+        runs = [r for r in runs if r[1] - r[0] >= 8]
+
+        if len(runs) < 2:
+            raise ValueError(
+                "jumlah frame tidak terdeteksi otomatis; isi "
+                "attack_frames / projectile_frames di AttackProfile"
+            )
+
+        cuts = [0]
+        for a, b in zip(runs, runs[1:]):
+            cuts.append((a[1] + b[0]) // 2)
+        cuts.append(width)
+        return cuts
+
+    def _frame_cuts(
+        self,
+        sheet: pygame.Surface,
+        count: Optional[int],
+        radius: int,
+    ) -> List[int]:
+        if count is None:
+            return self._auto_cuts(sheet)
+        return self._split_sheet(sheet, count, radius)
+
+    def _require_asset(self, filename: str) -> pygame.Surface:
+        if filename.lower() not in self.assets.asset_map:
+            raise ValueError(f"{filename} tidak ditemukan")
+        return self.assets.get_image(filename)
+
+    def _load_attack_assets(self) -> None:
+        """Memuat animasi serangan dan sprite proyektil sesuai profil monster."""
+
+        profile = self.attack_profile
+        if profile is None:
+            return
+
+        try:
+            self.attack_frames, self.attack_bounds = (
+                self._build_attack_frames(profile)
+            )
+            self.projectile_frames = self._build_projectile_frames(profile)
+        except (pygame.error, ValueError) as exc:
+            print(
+                f"[MonsterEntity] {self.monster.name}: serangan proyektil "
+                f"dinonaktifkan ({exc}); memakai serangan biasa."
+            )
+            self.attack_frames = []
+            self.attack_bounds = []
+            self.projectile_frames = []
+
+    def _build_attack_frames(
+        self,
+        profile: AttackProfile,
+    ) -> Tuple[List[pygame.Surface], List[pygame.Rect]]:
+        attack_sheet = self._require_asset(profile.attack_file)
+
+        # Skala acuan = rata-rata skala frame idle agar ukuran konsisten.
+        idle_sheet = self.assets.get_image(self.idle_filename)
+        idle_w, idle_h = idle_sheet.get_size()
+        scales: List[float] = []
+        widths: List[float] = []
+        for i in range(6):
+            x0 = round(i * idle_w / 6)
+            x1 = round((i + 1) * idle_w / 6)
+            cell = idle_sheet.subsurface(pygame.Rect(x0, 0, x1 - x0, idle_h))
+            box = cell.get_bounding_rect(min_alpha=8)
+            if box.width > 0 and box.height > 0:
+                s = min(250 / box.width, 265 / box.height)
+                scales.append(s)
+                widths.append(box.width * s)
+
+        if not scales:
+            raise ValueError("sprite idle kosong")
+
+        scale = sum(scales) / len(scales)
+        right_anchor = round(self.width / 2 + (sum(widths) / len(widths)) / 2)
+
+        cuts = self._frame_cuts(
+            attack_sheet, profile.attack_frames, profile.attack_split_radius
+        )
+        sheet_h = attack_sheet.get_height()
+
+        frames: List[pygame.Surface] = []
+        bounds: List[pygame.Rect] = []
+
+        for i in range(len(cuts) - 1):
+            cell = attack_sheet.subsurface(
+                pygame.Rect(cuts[i], 0, cuts[i + 1] - cuts[i], sheet_h)
+            )
+            box = cell.get_bounding_rect(min_alpha=8)
+            if box.width <= 0 or box.height <= 0:
+                raise ValueError(f"frame {i} di {profile.attack_file} kosong")
+
+            cropped = cell.subsurface(box).copy()
+            size = (
+                max(1, round(cropped.get_width() * scale)),
+                max(1, round(cropped.get_height() * scale)),
+            )
+            scaled = pygame.transform.scale(cropped, size)
+
+            canvas = pygame.Surface(
+                (self.width, self.height), pygame.SRCALPHA
+            )
+
+            if profile.attack_align == "right":
+                x = right_anchor - size[0]
+            else:
+                x = (self.width - size[0]) // 2
+
+            # Kaki sejajar dasar kanvas seperti frame idle.
+            canvas.blit(scaled, (x, self.height - size[1]))
+
+            frames.append(canvas)
+            bounds.append(canvas.get_bounding_rect(min_alpha=40))
+
+        return frames, bounds
+
+    def _build_projectile_frames(
+        self,
+        profile: AttackProfile,
+    ) -> List[pygame.Surface]:
+        sheet = self._require_asset(profile.projectile_file)
+
+        cuts = self._frame_cuts(
+            sheet, profile.projectile_frames, profile.projectile_split_radius
+        )
+        sheet_h = sheet.get_height()
+
+        crops: List[pygame.Surface] = []
+        for i in range(len(cuts) - 1):
+            cell = sheet.subsurface(
+                pygame.Rect(cuts[i], 0, cuts[i + 1] - cuts[i], sheet_h)
+            )
+            box = cell.get_bounding_rect(min_alpha=12)
+            if box.width <= 0 or box.height <= 0:
+                raise ValueError(
+                    f"frame {i} di {profile.projectile_file} kosong"
+                )
+            crop = cell.subsurface(box).copy()
+            if profile.flip_projectile:
+                crop = pygame.transform.flip(crop, True, False)
+            crops.append(crop)
+
+        scale = profile.projectile_height / max(c.get_height() for c in crops)
+
+        scaled = [
+            pygame.transform.smoothscale(
+                c,
+                (
+                    max(1, round(c.get_width() * scale)),
+                    max(1, round(c.get_height() * scale)),
+                ),
+            )
+            for c in crops
+        ]
+
+        canvas_w = max(s.get_width() for s in scaled)
+        canvas_h = max(s.get_height() for s in scaled)
+
+        frames: List[pygame.Surface] = []
+        for s in scaled:
+            canvas = pygame.Surface((canvas_w, canvas_h), pygame.SRCALPHA)
+            x = 0 if profile.projectile_align == "lead" else (
+                (canvas_w - s.get_width()) // 2
+            )
+            canvas.blit(s, (x, (canvas_h - s.get_height()) // 2))
+            frames.append(canvas)
+
+        return frames
+
+    @property
+    def has_projectile_attack(self) -> bool:
+        return (
+            self.attack_profile is not None
+            and bool(self.attack_frames)
+            and bool(self.projectile_frames)
+        )
+
+    @property
+    def projectile_speed(self) -> float:
+        return self.attack_profile.projectile_speed if self.attack_profile else 380.0
+
+    def supports_projectile_action(self, action_type: str) -> bool:
+        return (
+            self.has_projectile_attack
+            and action_type in self.attack_profile.actions
+        )
+
+    def trigger_projectile_attack(self) -> bool:
+        """Mulai animasi menyerang; proyektil keluar di frame peluncuran."""
+
+        if not self.monster.is_alive or not self.has_projectile_attack:
+            return False
+
+        profile = self.attack_profile
+        self.current_state = "ranged_attack"
+        self.attack_time = 0.0
+        self.projectile_launched = False
+        self.state_timer = (
+            len(self.attack_frames) / profile.attack_fps + profile.hold
+        )
+        return True
+
+    def pop_projectile_launch(self) -> Optional[Tuple[float, float]]:
+        """Titik muncul proyektil (sekali saja) saat frame peluncuran tiba."""
+
+        if (
+            self.current_state != "ranged_attack"
+            or self.projectile_launched
+            or not self.attack_profile
+        ):
+            return None
+
+        profile = self.attack_profile
+        launch = min(profile.launch_frame, len(self.attack_frames) - 1)
+
+        if int(self.attack_time * profile.attack_fps) < launch:
+            return None
+
+        self.projectile_launched = True
+
+        bounds = self.attack_bounds[launch]
+        x = self.rect.x + self.shake_offset[0]
+        y = self.rect.y + self.shake_offset[1]
+
+        # Tepi kiri frame serangan (ujung senjata / mulut / tangan).
+        return (
+            float(x + bounds.left),
+            float(
+                y + bounds.top + bounds.height * profile.spawn_y_ratio
+                + profile.spawn_y_offset
+            ),
+        )
+
     def trigger_idle(self) -> None:
         if self.monster.is_alive:
             self.current_state = "idle"
@@ -873,6 +1391,9 @@ class MonsterEntity(GameObject):
         super().update(dt)
 
         self.time_counter += dt
+
+        if self.current_state == "ranged_attack":
+            self.attack_time += dt
 
         if self.state_timer > 0:
             self.state_timer = max(
@@ -1112,6 +1633,19 @@ class MonsterEntity(GameObject):
             )
             display_sprite = self.idle_frames[frame_index]
 
+        # Animasi menyerang dari sprite sheet attack_* milik profil monster.
+        if (
+            self.current_state == "ranged_attack"
+            and self.attack_frames
+            and self.attack_profile
+            and self.monster.is_alive
+        ):
+            attack_index = min(
+                int(self.attack_time * self.attack_profile.attack_fps),
+                len(self.attack_frames) - 1,
+            )
+            display_sprite = self.attack_frames[attack_index]
+
         # Monster bergerak maju ketika menyerang.
         if (
             self.current_state == "attack"
@@ -1169,3 +1703,147 @@ class MonsterEntity(GameObject):
 
         self._render_attack_effect(surface, x, y)
         self._render_ultimate(surface, x, y)
+
+
+class MonsterProjectile(GameObject):
+    """Objek serangan monster yang meluncur ke titik tempat pemain berdiri."""
+
+    FADE_TIME = 0.30
+    SHATTER_TIME = 0.25
+
+    def __init__(
+        self,
+        frames: List[pygame.Surface],
+        start: Tuple[float, float],
+        target: Tuple[float, float],
+        speed: float,
+        profile: AttackProfile,
+    ):
+        width, height = frames[0].get_size()
+        super().__init__(
+            start[0] - width / 2, start[1] - height / 2, width, height
+        )
+
+        self.frames = frames
+        self.profile = profile
+        self.cx = float(start[0])
+        self.cy = float(start[1])
+        self.target = (float(target[0]), float(target[1]))
+        self.speed = speed
+
+        dx = self.target[0] - self.cx
+        dy = self.target[1] - self.cy
+        distance = math.hypot(dx, dy)
+
+        self.remaining = distance
+        self.direction = (
+            (dx / distance, dy / distance) if distance > 0 else (-1.0, 0.0)
+        )
+
+        self.state = "flying"   # flying -> fade | shatter -> done
+        self.state_time = 0.0
+        self.anim_time = 0.0
+        self.outcome: Optional[str] = None  # hit | parried | missed
+
+    @property
+    def is_flying(self) -> bool:
+        return self.state == "flying"
+
+    @property
+    def is_done(self) -> bool:
+        return self.state == "done"
+
+    def get_hitbox(self) -> pygame.Rect:
+        """Hitbox sesuai profil (dapat digeser ke sisi depan sprite)."""
+
+        w = int(self.width * self.profile.hitbox_w)
+        h = int(self.height * self.profile.hitbox_h)
+
+        if self.profile.hitbox_left is None:
+            left = int(self.cx - w / 2)
+        else:
+            left = int(
+                self.cx - self.width / 2
+                + self.width * self.profile.hitbox_left
+            )
+
+        return pygame.Rect(left, int(self.cy - h / 2), w, h)
+
+    def impact(self, outcome: str) -> None:
+        """Proyektil mengenai pemain atau ditangkis: pecah di tempat."""
+
+        if self.state != "flying":
+            return
+
+        self.outcome = outcome
+        self.state = "shatter"
+        self.state_time = 0.0
+
+    def update(self, dt: float) -> None:
+        self.anim_time += dt
+
+        if self.state == "flying":
+            step = min(self.speed * dt, self.remaining)
+            self.cx += self.direction[0] * step
+            self.cy += self.direction[1] * step
+            self.remaining -= step
+
+            # Sampai di titik tujuan tanpa mengenai siapa pun: meleset.
+            if self.remaining <= 0:
+                self.outcome = "missed"
+                self.state = "fade"
+                self.state_time = 0.0
+
+        else:
+            self.state_time += dt
+            limit = (
+                self.SHATTER_TIME
+                if self.state == "shatter"
+                else self.FADE_TIME
+            )
+            if self.state_time >= limit:
+                self.state = "done"
+
+        self.x = self.cx - self.width / 2
+        self.y = self.cy - self.height / 2
+        super().update(dt)
+
+    def render(self, surface: pygame.Surface) -> None:
+        if self.state == "done":
+            return
+
+        frame = self.frames[
+            int(self.anim_time * self.profile.projectile_fps)
+            % len(self.frames)
+        ]
+
+        alpha = 255
+        if self.state == "fade":
+            alpha = int(255 * (1.0 - self.state_time / self.FADE_TIME))
+        elif self.state == "shatter":
+            t = self.state_time / self.SHATTER_TIME
+            alpha = int(255 * (1.0 - t))
+            grow = 1.0 + 0.35 * t
+            frame = pygame.transform.smoothscale(
+                frame,
+                (
+                    max(1, int(frame.get_width() * grow)),
+                    max(1, int(frame.get_height() * grow)),
+                ),
+            )
+
+        if alpha < 255:
+            frame = frame.copy()
+            frame.set_alpha(max(0, alpha))
+
+        surface.blit(
+            frame,
+            (
+                int(self.cx - frame.get_width() / 2),
+                int(self.cy - frame.get_height() / 2),
+            ),
+        )
+
+
+# Alias lama agar kode yang masih memakai nama Frost tetap jalan.
+FrostProjectile = MonsterProjectile
