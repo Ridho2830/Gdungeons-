@@ -6,6 +6,7 @@ Dijkstra (Mage Map Vision), interaksi event ruangan, dan pelacak objektif di HUD
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Set
+from collections import deque
 import math
 import pygame
 from engine.assets import AssetManager
@@ -1114,7 +1115,80 @@ class ExplorationState(GameState):
         if self.btn_inventory:
             self.btn_inventory.render(surface)
 
-        self.log_box.render(surface)
+        self._render_map_log(surface)
+
+
+    def _render_map_log(self, surface: pygame.Surface) -> None:
+        """Render log peta dengan pembungkusan teks dan clipping di dalam panel."""
+        rect = self.log_box.rect
+        pygame.draw.rect(surface, (17, 14, 26), rect, border_radius=8)
+        pygame.draw.rect(surface, COLOR_PANEL_BORDER, rect, width=2, border_radius=8)
+
+        messages = []
+        for attr in ("messages", "lines", "logs", "entries"):
+            value = getattr(self.log_box, attr, None)
+            if isinstance(value, (list, tuple, deque)):
+                messages = list(value)
+                break
+
+        # Jika LogBox menyimpan pesan dengan format internal lain, tetap gunakan
+        # renderer aslinya tetapi batasi gambar agar tidak keluar dari panel.
+        if not messages:
+            old_clip = surface.get_clip()
+            surface.set_clip(rect.inflate(-4, -4))
+            try:
+                self.log_box.render(surface)
+            finally:
+                surface.set_clip(old_clip)
+            return
+
+        font_size = max(12, int(16 * SCREEN_HEIGHT / 900))
+        font = self.assets.get_font(font_size)
+        pad_x = max(9, int(12 * SCREEN_WIDTH / 1600))
+        pad_y = max(7, int(10 * SCREEN_HEIGHT / 900))
+        max_width = max(20, rect.width - pad_x * 2)
+        line_height = max(font.get_linesize(), int(22 * SCREEN_HEIGHT / 900))
+
+        wrapped = []
+        for message in messages:
+            if isinstance(message, (tuple, list)):
+                message = next(
+                    (part for part in message if isinstance(part, str)),
+                    str(message),
+                )
+            message = str(message)
+            current = ""
+            for word in message.split():
+                candidate = word if not current else f"{current} {word}"
+                if font.size(candidate)[0] <= max_width:
+                    current = candidate
+                else:
+                    if current:
+                        wrapped.append(current)
+                    # Pecah kata panjang yang tidak memiliki spasi.
+                    chunk = ""
+                    for char in word:
+                        if chunk and font.size(chunk + char)[0] > max_width:
+                            wrapped.append(chunk)
+                            chunk = char
+                        else:
+                            chunk += char
+                    current = chunk
+            if current:
+                wrapped.append(current)
+
+        available_lines = max(1, (rect.height - pad_y * 2) // line_height)
+        visible_lines = wrapped[-available_lines:]
+        old_clip = surface.get_clip()
+        surface.set_clip(rect.inflate(-4, -4))
+        try:
+            y = rect.y + pad_y
+            for line in visible_lines:
+                text_surface = font.render(line, True, COLOR_TEXT_WHITE)
+                surface.blit(text_surface, (rect.x + pad_x, y))
+                y += line_height
+        finally:
+            surface.set_clip(old_clip)
 
     def _render_inventory_modal(self, surface: pygame.Surface) -> None:
         """Jendela modal inventaris pemain bernuansa RPG 16-bit pixel art interaktif."""

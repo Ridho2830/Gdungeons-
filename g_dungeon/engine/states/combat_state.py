@@ -1,3 +1,4 @@
+# Revisi layout CombatState: posisi panel, log, tombol, dan header dirapikan.
 """Layar pertarungan turn-based G-Dungeons."""
 
 from typing import Any, List, Optional, Tuple
@@ -52,8 +53,19 @@ class CombatState(GameState):
         self.screen_shake_time = 0.0
         self.screen_shake_amount = 0.0
 
+        # Layout UI dibuat proporsional terhadap resolusi layar.
+        sx = SCREEN_WIDTH / 1600
+        sy = SCREEN_HEIGHT / 900
+        panel_top = int(SCREEN_HEIGHT * 0.67)
+        bar_h = max(17, int(34 * sy))
+        bar_gap = max(4, int(7 * sy))
+        bar_w = int(SCREEN_WIDTH * 0.30)
+        left_bar_x = int(SCREEN_WIDTH * 0.03)
+        right_bar_x = int(SCREEN_WIDTH * 0.67)
+        status_y = panel_top + int(46 * sy)
+
         self.player_hp_bar = UIProgressBar(
-            rect=pygame.Rect(80, 500, 260, 24),
+            rect=pygame.Rect(left_bar_x, status_y, bar_w, bar_h),
             max_value=3000,
             current_value=3000,
             fill_color=COLOR_HP_GREEN,
@@ -61,7 +73,7 @@ class CombatState(GameState):
         )
 
         self.player_def_bar = UIProgressBar(
-            rect=pygame.Rect(80, 532, 260, 20),
+            rect=pygame.Rect(left_bar_x, status_y + bar_h + bar_gap, bar_w, max(15, int(30 * sy))),
             max_value=200,
             current_value=200,
             fill_color=COLOR_DEFENSE_BLUE,
@@ -69,7 +81,7 @@ class CombatState(GameState):
         )
 
         self.monster_hp_bar = UIProgressBar(
-            rect=pygame.Rect(850, 480, 320, 24),
+            rect=pygame.Rect(right_bar_x, status_y, bar_w, bar_h),
             max_value=2500,
             current_value=2500,
             fill_color=COLOR_HP_RED,
@@ -77,7 +89,7 @@ class CombatState(GameState):
         )
 
         self.monster_rage_bar = UIProgressBar(
-            rect=pygame.Rect(850, 512, 320, 20),
+            rect=pygame.Rect(right_bar_x, status_y + bar_h + bar_gap, bar_w, max(15, int(30 * sy))),
             max_value=100,
             current_value=0,
             fill_color=COLOR_RAGE_ORANGE,
@@ -85,9 +97,14 @@ class CombatState(GameState):
             show_numeric=True,
         )
 
+        # LogBox dipakai juga untuk menyimpan pesan; rendering custom ada di bawah.
+        log_x = int(SCREEN_WIDTH * 0.34)
+        log_y = panel_top + int((SCREEN_HEIGHT - panel_top) * 0.47)
+        log_w = int(SCREEN_WIDTH * 0.45)
+        log_h = max(65, SCREEN_HEIGHT - log_y - int(18 * sy))
         self.combat_log = LogBox(
-            pygame.Rect(400, 575, 480, 130),
-            max_lines=5,
+            pygame.Rect(log_x, log_y, log_w, log_h),
+            max_lines=6,
         )
 
         self.buttons: List[UIButton] = []
@@ -116,51 +133,65 @@ class CombatState(GameState):
         self.stun_skip_active = False   # True saat giliran pemain dihanguskan stun
 
     def _init_buttons(self) -> None:
-        btn_w, btn_h = 160, 44
+        """Tombol aksi bergaya panel game, rapi dan responsif."""
+        sx = SCREEN_WIDTH / 1600
+        sy = SCREEN_HEIGHT / 900
+        panel_top = int(SCREEN_HEIGHT * 0.67)
+        lower_top = panel_top + int((SCREEN_HEIGHT - panel_top) * 0.46)
+
+        margin_x = int(SCREEN_WIDTH * 0.023)
+        gap_x = int(SCREEN_WIDTH * 0.013)
+        btn_w = int(SCREEN_WIDTH * 0.145)
+        btn_h = max(30, int((SCREEN_HEIGHT - lower_top - int(25 * sy)) / 2.25))
+        gap_y = max(5, int(10 * sy))
+        top_y = lower_top + int(12 * sy)
+        bottom_y = top_y + btn_h + gap_y
+        left_x = margin_x
+        right_x = left_x + btn_w + gap_x
 
         self.btn_attack = UIButton(
-            rect=pygame.Rect(80, 575, btn_w, btn_h),
+            rect=pygame.Rect(left_x, top_y, btn_w, btn_h),
             text="Serang",
             icon_name="atk",
             on_click=self._player_attack,
         )
-
-        self.btn_skill = UIButton(
-            rect=pygame.Rect(80, 630, btn_w, btn_h),
-            text="Skill Khusus",
-            icon_name="magic",
-            hover_color=(120, 60, 170),
-            on_click=self._player_skill,
-        )
-
         self.btn_item = UIButton(
-            rect=pygame.Rect(260, 575, btn_w, btn_h),
+            rect=pygame.Rect(right_x, top_y, btn_w, btn_h),
             text="Potion HP",
             icon_name="heal",
             hover_color=(40, 130, 80),
             on_click=self._player_use_potion,
         )
-
+        self.btn_skill = UIButton(
+            rect=pygame.Rect(left_x, bottom_y, btn_w, btn_h),
+            text="Skill Khusus",
+            icon_name="magic",
+            hover_color=(120, 60, 170),
+            on_click=self._player_skill,
+        )
         self.btn_defend = UIButton(
-            rect=pygame.Rect(260, 630, btn_w, btn_h),
+            rect=pygame.Rect(right_x, bottom_y, btn_w, btn_h),
             text="Bertahan",
             icon_name="def",
-            hover_color=(40, 80, 150),
             on_click=self._player_defend,
         )
 
+        run_w = int(SCREEN_WIDTH * 0.18)
+        run_h = max(34, int(72 * sy))
+        run_x = SCREEN_WIDTH - run_w - margin_x
+        run_y = lower_top + max(4, int((SCREEN_HEIGHT - lower_top - run_h) / 2))
         self.btn_run = UIButton(
-            rect=pygame.Rect(920, 630, 180, 44),
+            rect=pygame.Rect(run_x, run_y, run_w, run_h),
             text="Mundur ke Map",
-            icon_name="boots",
-            hover_color=(90, 80, 100),
+            icon_name="def",
+            hover_color=(130, 70, 70),
             on_click=self._player_run,
         )
 
         self.buttons = [
             self.btn_attack,
-            self.btn_skill,
             self.btn_item,
+            self.btn_skill,
             self.btn_defend,
             self.btn_run,
         ]
@@ -1275,62 +1306,68 @@ class CombatState(GameState):
         surface.blit(background, (offset_x, offset_y))
 
 
-        bottom_overlay = pygame.Surface(
-            (SCREEN_WIDTH, 240), pygame.SRCALPHA
-        )
-        bottom_overlay.fill((15, 12, 22, 225))
-        surface.blit(bottom_overlay, (0, 480))
+        # Panel bawah: area status dan area kontrol dipisahkan seperti mockup.
+        panel_top = int(SCREEN_HEIGHT * 0.67)
+        panel_height = SCREEN_HEIGHT - panel_top
+        divider_y = panel_top + int(panel_height * 0.46)
+        overlay = pygame.Surface((SCREEN_WIDTH, panel_height), pygame.SRCALPHA)
+        overlay.fill((11, 10, 20, 238))
+        surface.blit(overlay, (0, panel_top))
 
+        # Bingkai luar dan garis pemisah panel.
+        pygame.draw.rect(
+            surface, COLOR_PANEL_BORDER,
+            pygame.Rect(5, panel_top + 3, SCREEN_WIDTH - 10, panel_height - 8),
+            width=max(1, int(SCREEN_WIDTH / 800)), border_radius=7,
+        )
         pygame.draw.line(
-            surface,
-            COLOR_PANEL_BORDER,
-            (0, 480),
-            (SCREEN_WIDTH, 480),
-            width=2,
+            surface, COLOR_PANEL_BORDER,
+            (5, divider_y), (SCREEN_WIDTH - 5, divider_y),
+            width=max(2, int(SCREEN_WIDTH / 800)),
+        )
+        pygame.draw.line(
+            surface, (180, 145, 70),
+            (8, panel_top + 4), (SCREEN_WIDTH - 8, panel_top + 4), 1,
         )
 
-        # Nama monster dan informasi ultimate.
+        # Nama karakter di bagian atas panel status.
         if self.current_monster:
-            monster_font = self.assets.get_font(22, bold=True)
+            monster_font = self.assets.get_font(max(14, int(25 * SCREEN_HEIGHT / 900)), bold=True)
             monster_text = monster_font.render(
-                self.current_monster.name.upper(),
-                True,
-                COLOR_GOLD,
+                self.current_monster.name.upper(), True, COLOR_GOLD
             )
-            surface.blit(monster_text, (850, 445))
+            monster_x = int(SCREEN_WIDTH * 0.72)
+            monster_y = panel_top + int(12 * SCREEN_HEIGHT / 900)
+            surface.blit(monster_text, (monster_x, monster_y))
 
             turns_left = (
                 5 - self.turn_count % 5
-                if self.turn_count % 5 != 0
-                else 0
+                if self.turn_count % 5 != 0 else 0
             )
-
             if self.turn_count % 5 == 0:
                 ultimate_text = "[ ! ULTIMATE SIAP RONDE INI ! ]"
                 ultimate_color = (255, 60, 60)
             else:
                 ultimate_text = f"[ ULTIMATE: {turns_left} TURN ]"
                 ultimate_color = (210, 140, 255)
-
-            small_font = self.assets.get_font(12, bold=True)
-            ultimate_surface = small_font.render(
-                ultimate_text, True, ultimate_color
+            small_font = self.assets.get_font(max(9, int(15 * SCREEN_HEIGHT / 900)), bold=True)
+            ultimate_surface = small_font.render(ultimate_text, True, ultimate_color)
+            ultimate_x = min(
+                SCREEN_WIDTH - ultimate_surface.get_width() - 12,
+                monster_x + monster_text.get_width() + int(18 * SCREEN_WIDTH / 1600),
             )
-            surface.blit(
-                ultimate_surface,
-                (850 + monster_text.get_width() + 15, 452),
-            )
+            surface.blit(ultimate_surface, (ultimate_x, monster_y + int(5 * SCREEN_HEIGHT / 900)))
 
-        # Nama dan role pemain.
         if self.game.state_mgr:
             player = self.game.state_mgr.player
-            player_font = self.assets.get_font(20, bold=True)
+            player_font = self.assets.get_font(max(14, int(24 * SCREEN_HEIGHT / 900)), bold=True)
             player_text = player_font.render(
-                f"{player.name} ({player.role.value})",
-                True,
-                COLOR_TEXT_WHITE,
+                f"{player.name} ({player.role.value})", True, COLOR_TEXT_WHITE
             )
-            surface.blit(player_text, (80, 465))
+            surface.blit(
+                player_text,
+                (int(SCREEN_WIDTH * 0.11), panel_top + int(12 * SCREEN_HEIGHT / 900)),
+            )
 
             # Chip status efek di samping nama pemain.
             chip_font = self.assets.get_font(12, bold=True)
@@ -1392,58 +1429,54 @@ class CombatState(GameState):
             )
             button.render(surface)
 
-        if self.reaction_active:
-            self._render_reaction_hint(surface)
-
         # Log dan teks damage.
-        self.combat_log.render(surface)
+        self._render_combat_log(surface)
         self.floating_texts.render(surface)
 
-    def _render_reaction_hint(self, surface: pygame.Surface) -> None:
-        """Petunjuk kontrol singkat selama serangan proyektil berlangsung."""
+    def _render_combat_log(self, surface: pygame.Surface) -> None:
+        """Menggambar log dengan ukuran teks mendekati label tombol dan word-wrap aman."""
+        rect = self.combat_log.rect
+        pygame.draw.rect(surface, (13, 13, 24), rect, border_radius=8)
+        pygame.draw.rect(surface, COLOR_PANEL_BORDER, rect, width=2, border_radius=8)
 
-        font = self.assets.get_font(16, bold=True)
-        ready = bool(
-            self.player_entity and self.player_entity.guard_cooldown <= 0
-        )
+        font = self.assets.get_font(max(12, int(18 * SCREEN_HEIGHT / 900)))
+        padding_x = max(8, int(14 * SCREEN_WIDTH / 1600))
+        padding_y = max(4, int(6 * SCREEN_HEIGHT / 900))
+        max_width = max(30, rect.width - padding_x * 2)
+        line_height = max(font.get_linesize(), int(21 * SCREEN_HEIGHT / 900))
+        max_visible_lines = max(1, (rect.height - padding_y * 2) // line_height)
 
-        parts = [
-            ("GERAK: WASD", COLOR_TEXT_WHITE),
-            ("LOMPAT: SPACE", COLOR_TEXT_WHITE),
-            (
-                "TANGKIS: F / Klik Kanan" if ready else "TANGKIS: ...",
-                COLOR_GOLD if ready else COLOR_TEXT_MUTED,
-            ),
-        ]
-        rendered = [font.render(text, True, color) for text, color in parts]
-        gap = 28
-        total = sum(r.get_width() for r in rendered) + gap * (len(rendered) - 1)
+        wrapped_lines = []
+        for message in getattr(self.combat_log, "messages", []):
+            if isinstance(message, (tuple, list)):
+                message = next((part for part in message if isinstance(part, str)), str(message))
+            elif not isinstance(message, str):
+                message = str(message)
 
-        panel = pygame.Surface((total + 32, 34), pygame.SRCALPHA)
-        panel.fill((15, 12, 22, 200))
-        pygame.draw.rect(
-            panel, COLOR_PANEL_BORDER, panel.get_rect(), width=2
-        )
+            line = ""
+            for word in message.split():
+                candidate = word if not line else f"{line} {word}"
+                if font.size(candidate)[0] <= max_width:
+                    line = candidate
+                    continue
+                if line:
+                    wrapped_lines.append(line)
+                # Pecah kata panjang tanpa membiarkan teks keluar panel.
+                chunk = ""
+                for char in word:
+                    if chunk and font.size(chunk + char)[0] > max_width:
+                        wrapped_lines.append(chunk)
+                        chunk = char
+                    else:
+                        chunk += char
+                line = chunk
+            if line:
+                wrapped_lines.append(line)
 
-        px = (SCREEN_WIDTH - panel.get_width()) // 2
-        surface.blit(panel, (px, 22))
+        visible_lines = wrapped_lines[-max_visible_lines:]
+        y = rect.y + padding_y
+        for line in visible_lines:
+            text_surface = font.render(line, True, COLOR_TEXT_WHITE)
+            surface.blit(text_surface, (rect.x + padding_x, y))
+            y += line_height
 
-        x = px + 16
-        for r in rendered:
-            surface.blit(r, (x, 22 + (34 - r.get_height()) // 2))
-            x += r.get_width() + gap
-
-    def _render_hitboxes(self, surface: pygame.Surface) -> None:
-        if self.player_entity:
-            pygame.draw.rect(
-                surface, (60, 255, 90), self.player_entity.get_hurtbox(), 2
-            )
-
-        for projectile in self.projectiles:
-            pygame.draw.rect(surface, (255, 60, 60), projectile.get_hitbox(), 2)
-            pygame.draw.circle(
-                surface,
-                (255, 255, 0),
-                (int(projectile.target[0]), int(projectile.target[1])),
-                5,
-            )
