@@ -31,7 +31,7 @@ from engine.entities import (
 from engine.state_machine import GameState
 from engine.ui import FloatingTextManager, LogBox, UIButton, UIProgressBar
 from core.monster import Monster
-from core.player import PlayerRole
+from core.player import Player, PlayerRole
 
 
 class CombatState(GameState):
@@ -110,6 +110,10 @@ class CombatState(GameState):
         self.pending_attack: Optional[dict] = None
         self.projectiles: List[MonsterProjectile] = []
         self.show_hitboxes = False  # tekan F3 untuk debug hitbox
+
+        # Status efek khusus monster.
+        self.frost_hit_count = 0        # jumlah kena serangan Frost (2x = stun)
+        self.stun_skip_active = False   # True saat giliran pemain dihanguskan stun
 
     def _init_buttons(self) -> None:
         btn_w, btn_h = 160, 44
@@ -226,6 +230,10 @@ class CombatState(GameState):
         self.pending_attack = None
         self.projectiles.clear()
 
+        state.player.clear_status()
+        self.frost_hit_count = 0
+        self.stun_skip_active = False
+
         self.combat_log.messages.clear()
         self.combat_log.add_message(
             f"[*] Pertarungan dimulai melawan "
@@ -268,6 +276,12 @@ class CombatState(GameState):
             )
             self._trigger_shake(12.0, 0.4)
 
+    def exit(self) -> None:
+        """Status efek tidak terbawa keluar dari pertarungan."""
+        if self.game.state_mgr:
+            self.game.state_mgr.player.clear_status()
+        self.stun_skip_active = False
+
     def _player_attack(self) -> None:
         if (
             not self.is_player_turn
@@ -285,6 +299,9 @@ class CombatState(GameState):
         if is_crit:
             raw_roll = int(raw_roll * 1.5)
 
+        debuffed = player.attack_debuff_turns > 0
+        raw_roll = player.apply_attack_debuff(raw_roll)
+
         final_dmg = max(1, raw_roll - self.current_monster.def_)
         absorbed, actual_dmg = self.current_monster.take_damage(final_dmg)
 
@@ -300,6 +317,8 @@ class CombatState(GameState):
         self.audio.play("hit")
 
         crit_tag = " (KRITIS 1.5x!)" if is_crit else ""
+        if debuffed:
+            crit_tag += " (melemah -30%)"
         color = COLOR_GOLD if is_crit else COLOR_HP_RED
 
         self.floating_texts.add(
@@ -350,7 +369,7 @@ class CombatState(GameState):
             )
             return
 
-        dmg_raw = int(player.attack * 1.8)
+        dmg_raw = player.apply_attack_debuff(int(player.attack * 1.8))
         absorbed, actual_dmg = self.current_monster.take_damage(dmg_raw)
         player.skill_cooldown = 3
 
@@ -436,6 +455,7 @@ class CombatState(GameState):
         player = self.game.state_mgr.player
         self.defending = True
         player.shield = 80
+        def_gain = player.gain_defense(player.DEFEND_DEF_GAIN)
 
         if self.player_entity:
             self.player_entity.trigger_defend()
@@ -444,9 +464,13 @@ class CombatState(GameState):
         self.floating_texts.add(
             "+80 SHIELD", 200, 280, COLOR_DEFENSE_BLUE
         )
+        if def_gain > 0:
+            self.floating_texts.add(
+                f"+{def_gain} DEF", 200, 310, COLOR_DEFENSE_BLUE
+            )
         self.combat_log.add_message(
             "[#] Karakter bersiap bertahan! "
-            "Shield +80 meredam serangan ronde ini."
+            f"Shield +80 meredam serangan ronde ini, DEF +{def_gain}."
         )
         self._end_player_turn()
 
@@ -472,6 +496,15 @@ class CombatState(GameState):
         self.machine.change_state(STATE_EXPLORATION)
 
     def _end_player_turn(self) -> None:
+        # Debuff serangan berkurang 1 setiap giliran pemain yang terpakai.
+        if self.game.state_mgr:
+            p = self.game.state_mgr.player
+            if p.attack_debuff_turns > 0:
+                p.attack_debuff_turns -= 1
+                if p.attack_debuff_turns == 0:
+                    self.combat_log.add_message(
+                        "[~] Efek serangan melemah telah hilang."
+                    )
         self.is_player_turn = False
         self.turn_delay_timer = 1.0
 
@@ -504,6 +537,7 @@ class CombatState(GameState):
             absorbed, dmg_hp = player.take_damage(
                 raw_dmg, is_atomic_breath=True
             )
+            self._player_hurt_feedback(dmg_hp)
 
             self.floating_texts.add(
                 "ATOMIC BREATH!", 160, 200, (255, 80, 255)
@@ -536,6 +570,7 @@ class CombatState(GameState):
             self._trigger_shake(8.0, 0.25)
 
             absorbed, dmg_hp = player.take_damage(raw_dmg)
+            self._player_hurt_feedback(dmg_hp)
             healed = int(dmg_hp * 0.3)
             monster.hp = min(monster.max_hp, monster.hp + healed)
 
@@ -563,6 +598,7 @@ class CombatState(GameState):
             self.audio.play("hit")
             self._trigger_shake(14.0, 0.45)
             absorbed, dmg_hp = player.take_damage(raw_dmg)
+            self._player_hurt_feedback(dmg_hp)
 
             self.floating_texts.add(
                 "HANTAMAN BERAT!", 180, 220, COLOR_RAGE_ORANGE
@@ -585,6 +621,7 @@ class CombatState(GameState):
             self.audio.play("hit")
             self._trigger_shake(6.0, 0.2)
             absorbed, dmg_hp = player.take_damage(raw_dmg)
+            self._player_hurt_feedback(dmg_hp)
 
             if dmg_hp > 0:
                 self.floating_texts.add(
@@ -605,7 +642,83 @@ class CombatState(GameState):
                 f"(Shield menyerap {absorbed})."
             )
 
+        if action_type in ("attack", "heavy_slam", "lifesteal"):
+            self._apply_monster_hit_effects(dmg_hp)
+
         self._finish_monster_turn()
+
+    def _apply_monster_hit_effects(self, dmg_hp: int) -> None:
+        """Efek khusus monster saat serangannya BENAR-BENAR mengenai pemain.
+
+        - Skeleton Guard : lifesteal 30% dari damage yang masuk ke HP pemain.
+        - Shadow Wraith (Frost): kena 2x -> pemain STUN (hilang 1 giliran).
+        - Magma Golem    : pemain terbakar (10-20 dmg/ronde selama 2 ronde).
+        - Crystal Slime  : serangan pemain turun 30% selama 2 giliran.
+        """
+        if not self.current_monster or not self.game.state_mgr:
+            return
+
+        player = self.game.state_mgr.player
+        monster = self.current_monster
+        name = monster.name
+        tx, ty = self._player_text_anchor()
+
+        if name == "Skeleton Guard":
+            healed = int(dmg_hp * 0.30)
+            if healed > 0:
+                before = monster.hp
+                monster.hp = min(monster.max_hp, monster.hp + healed)
+                healed = monster.hp - before
+                self.floating_texts.add(
+                    f"+{healed} LIFESTEAL", 900, 220, (120, 255, 150)
+                )
+                self.combat_log.add_message(
+                    f"[+] {name} menyerap jiwa: lifesteal 30% dari "
+                    f"{dmg_hp} DMG, pulih +{healed} HP!"
+                )
+
+        elif name == "Shadow Wraith":
+            self.frost_hit_count += 1
+            if self.frost_hit_count >= 2:
+                self.frost_hit_count = 0
+                player.stunned = True
+                self.floating_texts.add("STUN!", tx, ty - 30, (150, 225, 255))
+                self.combat_log.add_message(
+                    "[!] Terkena 2x serangan beku! Pahlawan STUN, "
+                    "giliran berikutnya hangus!"
+                )
+            else:
+                self.floating_texts.add(
+                    "FROST 1/2", tx, ty - 30, (150, 225, 255)
+                )
+                self.combat_log.add_message(
+                    "[~] Hawa dingin menyelimuti tubuhmu (1/2). "
+                    "Satu serangan lagi akan membuatmu STUN!"
+                )
+
+        elif name == "Magma Golem":
+            player.burn_turns = Player.BURN_ROUNDS
+            self.floating_texts.add("BURN!", tx, ty - 30, COLOR_RAGE_ORANGE)
+            self.combat_log.add_message(
+                f"[!] Pahlawan TERBAKAR! Menerima "
+                f"{Player.BURN_DAMAGE_RANGE[0]}-{Player.BURN_DAMAGE_RANGE[1]} "
+                f"damage selama {Player.BURN_ROUNDS} ronde."
+            )
+
+        elif name == "Crystal Slime":
+            player.attack_debuff_turns = Player.ATTACK_DEBUFF_ROUNDS
+            self.floating_texts.add(
+                "ATK -30%", tx, ty - 30, (80, 255, 160)
+            )
+            self.combat_log.add_message(
+                "[!] Lendir asam melemahkanmu! Serangan turun 30% "
+                f"selama {Player.ATTACK_DEBUFF_ROUNDS} giliran."
+            )
+
+    def _player_hurt_feedback(self, dmg_hp: int) -> None:
+        """Animasi terluka pada pemain bila serangan benar-benar mengurangi HP."""
+        if dmg_hp > 0 and self.player_entity:
+            self.player_entity.trigger_hurt()
 
     def _finish_monster_turn(self) -> None:
         """Penutup giliran monster: cek kalah, cooldown, ronde berikutnya."""
@@ -625,6 +738,25 @@ class CombatState(GameState):
 
         player.reset_shield()
 
+        # Burn: damage langsung ke HP (mengabaikan DEF) di awal tiap ronde.
+        if player.burn_turns > 0:
+            burn_dmg = random.randint(*Player.BURN_DAMAGE_RANGE)
+            player.hp = max(0, player.hp - burn_dmg)
+            player.burn_turns -= 1
+            bx, by = self._player_text_anchor()
+            self.audio.play("hit")
+            self.floating_texts.add(
+                f"BURN -{burn_dmg}", bx, by, COLOR_RAGE_ORANGE
+            )
+            self.combat_log.add_message(
+                f"[~] Luka bakar membakar {player.name}: -{burn_dmg} HP "
+                f"(sisa {player.burn_turns} ronde)."
+            )
+            if not player.is_alive:
+                self._handle_defeat()
+                return
+
+        self.stun_skip_active = False
         self.turn_count += 1
         next_turn = self.turn_count
 
@@ -646,8 +778,23 @@ class CombatState(GameState):
                     "(Atomic Breath dalam 1 turn)!"
                 )
 
-        self.is_player_turn = True
         self.defending = False
+
+        # Stun: giliran pemain hangus, monster langsung menyerang lagi.
+        if player.stunned:
+            player.stunned = False
+            self.stun_skip_active = True
+            self.is_player_turn = False
+            self.turn_delay_timer = 1.4
+            sx, sy = self._player_text_anchor()
+            self.floating_texts.add("STUN! SKIP", sx, sy, (150, 225, 255))
+            self.combat_log.add_message(
+                f"[!] {player.name} terkena STUN dan tidak bisa bergerak "
+                f"di ronde ini!"
+            )
+            return
+
+        self.is_player_turn = True
 
     # ------------------------------------------------------------------
     # Serangan proyektil monster (menghindar / menangkis)
@@ -843,6 +990,8 @@ class CombatState(GameState):
                 f"(Shield menyerap {absorbed})."
             )
 
+        self._apply_monster_hit_effects(dmg_hp)
+
     def _on_projectile_parried(self) -> None:
         if not self.game.state_mgr:
             return
@@ -968,7 +1117,7 @@ class CombatState(GameState):
 
         # Saat serangan proyektil berlangsung: lompat (SPACE) dan tangkis (F / klik kanan).
         if self.reaction_active:
-            if not self.player_entity:
+            if not self.player_entity or self.stun_skip_active:
                 return
 
             if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
@@ -1014,6 +1163,7 @@ class CombatState(GameState):
             self.player_entity
             and (self.is_player_turn or self.reaction_active)
             and not self.victory_pending
+            and not self.stun_skip_active
         ):
             keys = pygame.key.get_pressed()
             self.player_entity.handle_movement(keys, dt)
@@ -1181,6 +1331,31 @@ class CombatState(GameState):
                 COLOR_TEXT_WHITE,
             )
             surface.blit(player_text, (80, 465))
+
+            # Chip status efek di samping nama pemain.
+            chip_font = self.assets.get_font(12, bold=True)
+            chips = []
+            if player.stunned:
+                chips.append(("STUN (giliran depan)", (150, 225, 255)))
+            if player.burn_turns > 0:
+                chips.append((f"BURN {player.burn_turns}R", COLOR_RAGE_ORANGE))
+            if player.attack_debuff_turns > 0:
+                chips.append(
+                    (f"ATK -30% ({player.attack_debuff_turns})", (80, 255, 160))
+                )
+            if (
+                self.current_monster
+                and self.current_monster.name == "Shadow Wraith"
+                and self.frost_hit_count > 0
+            ):
+                chips.append(
+                    (f"FROST {self.frost_hit_count}/2", (150, 225, 255))
+                )
+            cx = 80 + player_text.get_width() + 14
+            for label, color in chips:
+                chip = chip_font.render(f"[{label}]", True, color)
+                surface.blit(chip, (cx, 472))
+                cx += chip.get_width() + 8
 
         # Entitas.
         if self.player_entity:

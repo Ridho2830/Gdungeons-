@@ -1,0 +1,48 @@
+"""
+Module: engine/constants.py
+Description: Konfigurasi konstanta global, dimensi layar, warna palet RPG, dan nama state.
+"""
+
+# Dimensi Layar & Performa
+SCREEN_WIDTH = 1280
+SCREEN_HEIGHT = 720
+FPS = 60
+TITLE = "G-Dungeons: PyGame Edition"
+
+# Nama-nama State Resmi (Sesuai Dokumen Template & Rubrik Penilaian)
+STATE_MENU = "MENU_STATE"
+STATE_ROLE_SELECT = "ROLE_SELECT_STATE"
+STATE_EXPLORATION = "EXPLORATION_STATE"
+STATE_COMBAT = "COMBAT_STATE"
+STATE_PUZZLE = "PUZZLE_STATE"
+STATE_DIALOG = "DIALOG_STATE"
+STATE_PAUSE = "PAUSE_STATE"
+STATE_END = "END_STATE"
+
+# Palet Warna RPG Tematik (RGB)
+COLOR_BG_DARK = (18, 14, 24)
+COLOR_PANEL_BG = (28, 22, 38)
+COLOR_PANEL_BORDER = (88, 70, 110)
+COLOR_PANEL_HEADER = (44, 34, 60)
+
+# Aksen Warna
+COLOR_GOLD = (235, 185, 50)
+COLOR_GOLD_DARK = (180, 140, 30)
+COLOR_TEXT_WHITE = (240, 240, 245)
+COLOR_TEXT_MUTED = (160, 155, 175)
+COLOR_TEXT_DARK = (30, 25, 40)
+
+# Status & Bar
+COLOR_HP_GREEN = (46, 204, 113)
+COLOR_HP_BG = (60, 20, 25)
+COLOR_HP_RED = (231, 76, 60)
+COLOR_DEFENSE_BLUE = (52, 152, 219)
+COLOR_DEFENSE_BG = (20, 35, 60)
+COLOR_RAGE_ORANGE = (230, 126, 34)
+COLOR_MANA_PURPLE = (155, 89, 182)
+
+# Tombol
+COLOR_BTN_NORMAL = (40, 32, 55)
+COLOR_BTN_HOVER = (65, 52, 90)
+COLOR_BTN_BORDER = (120, 95, 150)
+COLOR_BTN_TEXT = (240, 240, 245)

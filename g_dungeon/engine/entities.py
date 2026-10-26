@@ -1103,42 +1103,65 @@ class MonsterEntity(GameObject):
 
     @staticmethod
     def _auto_cuts(sheet: pygame.Surface) -> List[int]:
-        """Deteksi frame otomatis: kelompok kolom berisi yang dipisah celah kosong."""
+        """Deteksi frame otomatis pada sprite sheet.
+
+        Mencoba beberapa lebar celah kosong (dari kecil ke besar) lalu memilih
+        pembagian yang jarak antar-frame-nya paling seragam. Cara ini tahan
+        terhadap sprite bergaris tipis / efek glow yang celahnya tidak rata.
+        Bila gagal total, sheet dibagi rata berdasarkan rasio lebar : tinggi.
+        """
 
         width, height = sheet.get_size()
         mask = pygame.mask.from_surface(sheet, 20)
         strip = pygame.mask.Mask((1, height), fill=True)
+        filled = [mask.overlap_area(strip, (x, 0)) > 0 for x in range(width)]
 
-        runs: List[Tuple[int, int]] = []
-        start: Optional[int] = None
-        last = 0
-        gap = 0
+        def find_runs(min_gap: int) -> List[Tuple[int, int]]:
+            runs: List[Tuple[int, int]] = []
+            start: Optional[int] = None
+            last = 0
+            gap = 0
+            for x, has_pixel in enumerate(filled):
+                if has_pixel:
+                    if start is None:
+                        start = x
+                    last = x
+                    gap = 0
+                elif start is not None:
+                    gap += 1
+                    if gap >= min_gap:
+                        runs.append((start, last + 1))
+                        start = None
+            if start is not None:
+                runs.append((start, last + 1))
+            return [r for r in runs if r[1] - r[0] >= 8]
 
-        for x in range(width):
-            if mask.overlap_area(strip, (x, 0)) > 0:
-                if start is None:
-                    start = x
-                last = x
-                gap = 0
-            elif start is not None:
-                gap += 1
-                if gap >= 6:
-                    runs.append((start, last + 1))
-                    start = None
+        best_runs: Optional[List[Tuple[int, int]]] = None
+        best_key: Optional[Tuple[float, int]] = None
+        for min_gap in (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48):
+            runs = find_runs(min_gap)
+            if not 2 <= len(runs) <= 12:
+                continue
+            centers = [(a + b) / 2 for a, b in runs]
+            spacing = [c2 - c1 for c1, c2 in zip(centers, centers[1:])]
+            mean = sum(spacing) / len(spacing)
+            var = sum((d - mean) ** 2 for d in spacing) / len(spacing)
+            cv = (var ** 0.5) / mean if mean > 0 else 9.0
+            key = (round(cv, 2), len(runs))
+            if best_key is None or key < best_key:
+                best_key, best_runs = key, runs
 
-        if start is not None:
-            runs.append((start, last + 1))
-
-        runs = [r for r in runs if r[1] - r[0] >= 8]
-
-        if len(runs) < 2:
-            raise ValueError(
-                "jumlah frame tidak terdeteksi otomatis; isi "
-                "attack_frames / projectile_frames di AttackProfile"
-            )
+        if best_runs is None:
+            count = round(width / max(1, height))
+            if count < 2:
+                raise ValueError(
+                    "jumlah frame tidak terdeteksi otomatis; isi "
+                    "attack_frames / projectile_frames di AttackProfile"
+                )
+            return [round(i * width / count) for i in range(count + 1)]
 
         cuts = [0]
-        for a, b in zip(runs, runs[1:]):
+        for a, b in zip(best_runs, best_runs[1:]):
             cuts.append((a[1] + b[0]) // 2)
         cuts.append(width)
         return cuts
@@ -1170,6 +1193,11 @@ class MonsterEntity(GameObject):
                 self._build_attack_frames(profile)
             )
             self.projectile_frames = self._build_projectile_frames(profile)
+            print(
+                f"[MonsterEntity] {self.monster.name}: "
+                f"{len(self.attack_frames)} frame serangan, "
+                f"{len(self.projectile_frames)} frame proyektil."
+            )
         except (pygame.error, ValueError) as exc:
             print(
                 f"[MonsterEntity] {self.monster.name}: serangan proyektil "
@@ -1474,52 +1502,181 @@ class MonsterEntity(GameObject):
             ),
         )
 
+    # ------------------------------------------------------------------
+    # Efek serangan prosedural (dipakai bila monster tidak punya sprite
+    # attack_* / object_attack_*, atau sprite-nya gagal dimuat).
+    # Setiap monster punya efek sendiri yang meluncur ke arah pemain.
+    # ------------------------------------------------------------------
+    # Perkiraan titik tubuh pemain di layar combat (pemain di x=140, y=260).
+    PLAYER_TARGET = (250, 390)
+
     def _render_attack_effect(
         self,
         surface: pygame.Surface,
         x: int,
         y: int,
     ) -> None:
-        """Efek cakar berwarna ungu ketika monster menyerang."""
+        """Efek serangan khas tiap monster saat state 'attack' (tanpa sprite)."""
 
-        if (
-            self.current_state != "attack"
-            or self.state_timer <= 0.1
-        ):
+        if self.current_state != "attack" or self.state_timer <= 0.0:
             return
+
+        progress = 1.0 - self.state_timer / self.attack_duration
+        if progress < 0.15:      # jeda awal: monster mengambil ancang-ancang
+            return
+        t = min(1.0, (progress - 0.15) / 0.85)
 
         effect = pygame.Surface(
             (SCREEN_WIDTH, SCREEN_HEIGHT),
             pygame.SRCALPHA,
         )
 
-        cx = x + 35
-        cy = y + 120
+        handlers = {
+            "idle_skeleton.png": self._fx_sword_slash,
+            "idle_slime.png": self._fx_acid_spit,
+            "idle_magma.png": self._fx_lava_ball,
+            "idle_godzilla.png": self._fx_kaiju_claw,
+            "idle_frost.png": self._fx_ice_shards,
+        }
+        handler = handlers.get(self.idle_filename, self._fx_purple_claw)
+        handler(effect, x, y, t)
 
+        surface.blit(effect, (0, 0))
+
+    def _fx_start(self, x: int, y: int) -> Tuple[float, float]:
+        """Titik asal efek: bagian depan (kiri) badan monster."""
+        return float(x + 40), float(y + 150)
+
+    @staticmethod
+    def _lerp_point(
+        a: Tuple[float, float],
+        b: Tuple[float, float],
+        k: float,
+        arc: float = 0.0,
+    ) -> Tuple[float, float]:
+        px = a[0] + (b[0] - a[0]) * k
+        py = a[1] + (b[1] - a[1]) * k - math.sin(k * math.pi) * arc
+        return px, py
+
+    def _fx_purple_claw(self, fx, x, y, t) -> None:
+        """Cakar ungu bawaan (cadangan untuk monster tanpa efek khusus)."""
+        alpha = int(230 * (1.0 - t * 0.6))
+        cx, cy = x + 35, y + 120
         for ox, oy in [(-10, -20), (10, 0), (30, 20)]:
-            points = [
+            pts = [
                 (cx + ox + 30, cy + oy - 45),
                 (cx + ox - 25, cy + oy),
                 (cx + ox + 15, cy + oy + 45),
             ]
+            pygame.draw.lines(fx, (230, 40, 255, alpha), False, pts, 6)
+            pygame.draw.lines(fx, (255, 255, 255, alpha), False, pts, 2)
 
-            pygame.draw.lines(
-                effect,
-                (230, 40, 255, 200),
-                False,
-                points,
-                6,
+    def _fx_sword_slash(self, fx, x, y, t) -> None:
+        """Skeleton Guard: tiga tebasan pedang berkarat menyilang di pemain."""
+        tx, ty = self.PLAYER_TARGET
+        alpha = int(255 * (1.0 - max(0.0, t - 0.55) / 0.45))
+        reach = min(1.0, t / 0.45)
+        for i, off in enumerate((-34, 0, 34)):
+            if t < i * 0.12:
+                continue
+            k = min(1.0, (t - i * 0.12) / 0.35)
+            length = 95 * k
+            sx, sy = tx + off - 40, ty - 80
+            ex, ey = sx + length * 0.55, sy + length * 1.45
+            pygame.draw.line(fx, (150, 200, 230, alpha), (sx, sy), (ex, ey), 9)
+            pygame.draw.line(fx, (255, 255, 255, alpha), (sx, sy), (ex, ey), 3)
+        # Riak tebasan dari monster ke pemain.
+        if reach < 1.0:
+            sx, sy = self._fx_start(x, y)
+            px, py = self._lerp_point((sx, sy), (tx, ty), reach)
+            pygame.draw.line(fx, (200, 230, 255, 140), (sx, sy), (px, py), 3)
+
+    def _fx_acid_spit(self, fx, x, y, t) -> None:
+        """Crystal Slime: semburan asam hijau melengkung lalu memercik."""
+        start = self._fx_start(x, y)
+        target = self.PLAYER_TARGET
+        fly = min(1.0, t / 0.65)
+        if t < 0.65:
+            for n in range(6):          # ekor tetesan
+                k = max(0.0, fly - n * 0.06)
+                px, py = self._lerp_point(start, target, k, arc=120)
+                r = max(3, 17 - n * 2)
+                pygame.draw.circle(fx, (60, 255, 150, 230 - n * 30), (int(px), int(py)), r)
+            px, py = self._lerp_point(start, target, fly, arc=120)
+            pygame.draw.circle(fx, (200, 255, 230, 255), (int(px) - 4, int(py) - 4), 5)
+        else:
+            k = (t - 0.65) / 0.35
+            alpha = int(230 * (1.0 - k))
+            for i in range(10):         # percikan asam
+                ang = i * math.tau / 10
+                d = 18 + 55 * k
+                px = target[0] + math.cos(ang) * d
+                py = target[1] + math.sin(ang) * d * 0.7 + 25 * k * k
+                pygame.draw.circle(fx, (70, 255, 160, alpha), (int(px), int(py)), max(2, int(9 * (1 - k))))
+            pygame.draw.ellipse(
+                fx, (40, 200, 120, int(alpha * 0.6)),
+                (target[0] - 40, target[1] + 20, 80, 24),
             )
 
-            pygame.draw.lines(
-                effect,
-                (255, 255, 255, 230),
-                False,
-                points,
-                2,
-            )
+    def _fx_lava_ball(self, fx, x, y, t) -> None:
+        """Magma Golem: bola lava berapi meluncur lalu meledak."""
+        start = self._fx_start(x, y)
+        target = self.PLAYER_TARGET
+        fly = min(1.0, t / 0.6)
+        if t < 0.6:
+            for n in range(7):
+                k = max(0.0, fly - n * 0.05)
+                px, py = self._lerp_point(start, target, k, arc=50)
+                r = max(4, 26 - n * 3)
+                col = (255, 140 - n * 10, 20, 235 - n * 28)
+                pygame.draw.circle(fx, col, (int(px), int(py)), r)
+            px, py = self._lerp_point(start, target, fly, arc=50)
+            pygame.draw.circle(fx, (255, 235, 120, 255), (int(px), int(py)), 11)
+        else:
+            k = (t - 0.6) / 0.4
+            alpha = int(240 * (1.0 - k))
+            radius = int(25 + 85 * k)
+            pygame.draw.circle(fx, (255, 120, 20, alpha), target, radius, 8)
+            pygame.draw.circle(fx, (255, 220, 90, int(alpha * 0.7)), target, int(radius * 0.55))
+            for i in range(8):          # percikan bara
+                ang = i * math.tau / 8 + 0.4
+                d = radius * 1.1
+                pygame.draw.circle(
+                    fx, (255, 170, 40, alpha),
+                    (int(target[0] + math.cos(ang) * d), int(target[1] + math.sin(ang) * d)),
+                    4,
+                )
 
-        surface.blit(effect, (0, 0))
+    def _fx_kaiju_claw(self, fx, x, y, t) -> None:
+        """Corrupted Crystal Kaiju: cakar merah + gelombang kejut di tanah."""
+        tx, ty = self.PLAYER_TARGET
+        alpha = int(255 * (1.0 - max(0.0, t - 0.6) / 0.4))
+        # Gelombang kejut menjalar di tanah menuju pemain.
+        ground = ty + 95
+        sx = x + 30
+        head = sx + (tx - sx) * min(1.0, t / 0.6)
+        pygame.draw.line(fx, (255, 90, 120, int(alpha * 0.8)), (sx, ground), (head, ground), 6)
+        pygame.draw.ellipse(fx, (255, 150, 170, int(alpha * 0.7)), (head - 30, ground - 14, 60, 28), 3)
+        # Tiga goresan cakar kristal di pemain.
+        if t > 0.4:
+            k = min(1.0, (t - 0.4) / 0.3)
+            for off in (-36, 0, 36):
+                a = (tx + off + 30, ty - 90)
+                b = (tx + off - 20 * k, ty - 90 + 170 * k)
+                pygame.draw.line(fx, (255, 60, 110, alpha), a, b, 11)
+                pygame.draw.line(fx, (255, 235, 245, alpha), a, b, 4)
+
+    def _fx_ice_shards(self, fx, x, y, t) -> None:
+        """Frost (cadangan bila proyektil es gagal dimuat): pecahan es."""
+        start = self._fx_start(x, y)
+        target = self.PLAYER_TARGET
+        fly = min(1.0, t / 0.7)
+        alpha = int(240 * (1.0 - max(0.0, t - 0.7) / 0.3))
+        for i, dy in enumerate((-40, 0, 40)):
+            px, py = self._lerp_point(start, (target[0], target[1] + dy), fly)
+            pts = [(px - 34, py), (px + 14, py - 9), (px + 14, py + 9)]
+            pygame.draw.polygon(fx, (150, 225, 255, alpha), pts)
+            pygame.draw.polygon(fx, (255, 255, 255, alpha), pts, 2)
 
     def _render_ultimate(
         self,

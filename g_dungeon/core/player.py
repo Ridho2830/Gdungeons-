@@ -86,6 +86,11 @@ class Player:
         self.skill_cooldown: int = 0     # Cooldown skill (3 ronde)
         self.shield: int = 0             # Kapasitas penahan damage (+80 dari Bertahan)
 
+        # Status efek (debuff) dari serangan monster. Dihapus saat battle selesai.
+        self.burn_turns: int = 0             # sisa ronde terbakar (Magma Golem)
+        self.attack_debuff_turns: int = 0    # sisa giliran serangan melemah (Crystal Slime)
+        self.stunned: bool = False           # giliran berikutnya hangus (Frost / Shadow Wraith)
+
         self.location: str = initial_location
         self.inventory: Inventory = Inventory()
         self.travel_history: List[TravelRecord] = []
@@ -116,43 +121,55 @@ class Player:
         """Mage memiliki keunggulan pasif Map Vision otomatis."""
         return self.role == PlayerRole.MAGE
 
+    # ---- Konfigurasi status efek ----
+    BURN_ROUNDS: int = 2                     # lama burn setelah terkena (ronde)
+    BURN_DAMAGE_RANGE: Tuple[int, int] = (10, 20)  # damage burn per ronde (langsung ke HP)
+    ATTACK_DEBUFF_RATIO: float = 0.30        # serangan pemain turun 30%
+    ATTACK_DEBUFF_ROUNDS: int = 2            # berlaku untuk 2 giliran serangan pemain berikutnya
+
+    def clear_status(self) -> None:
+        """Menghapus seluruh status efek (dipanggil saat battle dimulai/selesai)."""
+        self.burn_turns = 0
+        self.attack_debuff_turns = 0
+        self.stunned = False
+
+    def apply_attack_debuff(self, raw_damage: int) -> int:
+        """Mengurangi damage serangan pemain bila sedang terkena debuff Slime."""
+        if self.attack_debuff_turns > 0:
+            return max(1, int(raw_damage * (1.0 - self.ATTACK_DEBUFF_RATIO)))
+        return raw_damage
+
+    # Pembagian damage: sebagian kecil kena DEF, sisanya kena HP.
+    # Contoh (rasio 0.2): damage 100, DEF 45 -> DEF -20, HP -80.
+    DEFENSE_SPLIT_RATIO: float = 0.20
+    # DEF yang dipulihkan setiap kali pemain menekan tombol Bertahan.
+    DEFEND_DEF_GAIN: int = 20
+
     def take_damage(self, raw_damage: int, is_atomic_breath: bool = False) -> Tuple[int, int]:
         """
         Menerima damage dengan kalkulasi:
         1. Pasif Knight (Ironclad Fortitude): Kurangi damage fisik 20% jika bukan Atomic Breath.
-        2. Shield & Defense memotong damage terlebih dahulu.
-        3. Sisa damage mengurangi HP.
+        2. Shield (hasil Bertahan) menyerap damage terlebih dahulu secara penuh.
+        3. Sisa damage DIBAGI: DEFENSE_SPLIT_RATIO (20%) mengurangi DEF,
+           sisanya (80%) mengurangi HP. Jika DEF tidak cukup, kekurangannya masuk ke HP.
         Mengembalikan (damage_absorbed, damage_to_hp).
         """
         effective_damage = raw_damage
         if self.role == PlayerRole.KNIGHT and not is_atomic_breath:
             effective_damage = max(1, int(raw_damage * 0.8))
 
-        total_defense = self.defense + self.shield
-        absorbed = 0
-        damage_to_hp = 0
+        # 1) Shield menyerap lebih dulu.
+        shield_absorbed = min(self.shield, effective_damage)
+        self.shield -= shield_absorbed
+        remaining = effective_damage - shield_absorbed
 
-        if total_defense > 0:
-            if effective_damage <= total_defense:
-                absorbed = effective_damage
-                # Kurangi shield dulu, sisa ke defense
-                if self.shield >= effective_damage:
-                    self.shield -= effective_damage
-                else:
-                    rem = effective_damage - self.shield
-                    self.shield = 0
-                    self.defense = max(0, self.defense - rem)
-                damage_to_hp = 0
-            else:
-                absorbed = total_defense
-                damage_to_hp = effective_damage - total_defense
-                self.shield = 0
-                self.defense = 0
-        else:
-            damage_to_hp = effective_damage
+        # 2) Sisa damage dibagi antara DEF dan HP.
+        def_absorbed = min(self.defense, int(remaining * self.DEFENSE_SPLIT_RATIO))
+        self.defense -= def_absorbed
+        damage_to_hp = remaining - def_absorbed
 
         self.hp = max(0, self.hp - damage_to_hp)
-        return absorbed, damage_to_hp
+        return shield_absorbed + def_absorbed, damage_to_hp
 
     def use_potion(self) -> int:
         """Memakai 1 Health Potion (+300 HP). Mengembalikan jumlah HP yang dipulihkan."""
@@ -177,9 +194,15 @@ class Player:
         self.max_defense += bonus
 
     def reset_shield(self) -> None:
-        """Mereset shield sementara di akhir ronde dan memulihkan defense dasar."""
+        """Mereset shield sementara di akhir ronde. DEF TIDAK dipulihkan otomatis
+        (hanya bertambah lewat tombol Bertahan)."""
         self.shield = 0
-        self.defense = self.base_defense
+
+    def gain_defense(self, amount: int) -> int:
+        """Menambah DEF hingga batas max_defense. Mengembalikan jumlah yang benar-benar naik."""
+        gained = max(0, min(amount, self.max_defense - self.defense))
+        self.defense += gained
+        return gained
 
     def add_travel_record(self, location: str, distance: int, from_loc: str) -> None:
         """Menambahkan riwayat perpindahan lokasi dan mengakumulasi langkah."""
