@@ -623,12 +623,13 @@ class PlayerEntity(GameObject):
             (hurtbox.right - 6, hurtbox.centery - layer.get_height() // 2),
         )
 
+    
     def handle_movement(
         self,
         keys: pygame.key.ScancodeWrapper,
         dt: float,
     ) -> None:
-        """Gerakan bebas pemain selama giliran pemain."""
+        """Gerakan kiri-kanan dan lompatan saja."""
 
         if not self.player.is_alive:
             return
@@ -640,10 +641,9 @@ class PlayerEntity(GameObject):
         ):
             return
 
+        # Input horizontal saja.
         left = keys[pygame.K_a] or keys[pygame.K_LEFT]
         right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
-        up = keys[pygame.K_w] or keys[pygame.K_UP]
-        down = keys[pygame.K_s] or keys[pygame.K_DOWN]
 
         running = (
             keys[pygame.K_LSHIFT]
@@ -652,43 +652,37 @@ class PlayerEntity(GameObject):
 
         speed = self.run_speed if running else self.move_speed
         dx = float(right) - float(left)
-        dy = float(down) - float(up)
 
+        # Gerakkan karakter ke kiri atau kanan.
         if dx != 0:
             self.x += dx * speed * dt
             self.facing_right = dx > 0
 
-        if dy != 0:
-            self.y += dy * speed * dt
-
-        # Batasi karakter ke area arena, bukan panel bawah.
+        # Batasi posisi horizontal dalam arena.
         self.x = max(
             0.0,
             min(self.x, SCREEN_WIDTH - self.width),
         )
-        self.y = max(
-            90.0,
-            min(self.y, 440.0 - self.height),
-        )
 
+        # Tidak ada perubahan self.y untuk gerakan horizontal.
         self.anim_sprite.flip_x = not self.facing_right
 
-        if dx != 0 or dy != 0:
-            self.move_state = "run" if running else "walk"
+        # Animasi berjalan atau diam.
+        if dx != 0 and self.grounded:
+            animation = "run" if running else "walk"
+            self.move_state = animation
 
-            if self.grounded:
-                animation = "run" if running else "walk"
+            if not self.anim_sprite.animations.get(animation):
+                animation = "idle"
 
-                if not self.anim_sprite.animations.get(animation):
-                    animation = "idle"
+            if self.anim_sprite.current_anim != animation:
+                self.anim_sprite.restart(
+                    animation,
+                    loop=True,
+                    fps=11.0,
+                )
 
-                if self.anim_sprite.current_anim != animation:
-                    self.anim_sprite.restart(
-                        animation,
-                        loop=True,
-                        fps=11.0,
-                    )
-        elif self.grounded:
+        elif dx == 0 and self.grounded:
             self.move_state = "idle"
 
             if self.anim_sprite.current_anim in ("walk", "run"):
