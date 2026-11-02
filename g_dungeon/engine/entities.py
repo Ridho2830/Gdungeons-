@@ -80,13 +80,17 @@ MONSTER_ATTACK_PROFILES: Dict[str, AttackProfile] = {
         spawn_y_offset=-18,
         attack_align="right",
     ),
-    # Skeleton Guard: jumlah frame dideteksi otomatis.
+    # Skeleton Guard: tombak/panah merah. Frame objeknya saling menempel
+    # (tanpa celah kosong), jadi jumlah frame diisi manual.
+    # Cek hasil potongan lewat: python tools/check_sheets.py
     "idle_skeleton.png": AttackProfile(
         attack_file="attack_skeleton.png",
         projectile_file="object_attack_skeleton.png",
         actions=("attack",),
+        attack_frames=6,
+        projectile_frames=4,
         launch_frame=3,
-        projectile_height=110,
+        projectile_height=80,
         projectile_speed=400.0,
     ),
     # Crystal Slime: semburan asam.
@@ -94,6 +98,8 @@ MONSTER_ATTACK_PROFILES: Dict[str, AttackProfile] = {
         attack_file="attack_slime.png",
         projectile_file="object_attack_slime.png",
         actions=("attack",),
+        attack_frames=6,
+        projectile_frames=4,
         launch_frame=2,
         projectile_height=90,
         projectile_speed=340.0,
@@ -562,6 +568,15 @@ class PlayerEntity(GameObject):
             self.anim_sprite.restart("defend", loop=False, fps=10.0)
 
         return True
+
+    def place_feet_at(self, ground_y: float) -> None:
+        """Atur posisi y agar telapak kaki pemain tepat di garis tanah."""
+
+        self.get_hurtbox()  # memastikan batas sprite idle sudah dihitung
+        if self._idle_bounds is not None:
+            self.y = float(ground_y - self._idle_bounds.bottom)
+            self.rect.topleft = (int(self.x), int(self.y))
+            self.anim_sprite.y = self.y
 
     def get_hurtbox(self) -> pygame.Rect:
         """Kotak tabrakan pemain (lebih kecil dari kanvas sprite)."""
@@ -1166,9 +1181,22 @@ class MonsterEntity(GameObject):
         count: Optional[int],
         radius: int,
     ) -> List[int]:
-        if count is None:
-            return self._auto_cuts(sheet)
-        return self._split_sheet(sheet, count, radius)
+        if count is not None:
+            return self._split_sheet(sheet, count, radius)
+
+        cuts = self._auto_cuts(sheet)
+
+        # Peringatan bila hasil deteksi tampak janggal (frame menempel/tidak rata).
+        widths = [b - a for a, b in zip(cuts, cuts[1:])]
+        if len(widths) < 2 or max(widths) > 1.6 * min(widths):
+            print(
+                f"[MonsterEntity] PERINGATAN: deteksi otomatis tidak pasti "
+                f"({len(widths)} frame, lebar {widths}). Isi attack_frames / "
+                f"projectile_frames di AttackProfile, lalu cek dengan "
+                f"'python tools/check_sheets.py'."
+            )
+
+        return cuts
 
     def _require_asset(self, filename: str) -> pygame.Surface:
         if filename.lower() not in self.assets.asset_map:

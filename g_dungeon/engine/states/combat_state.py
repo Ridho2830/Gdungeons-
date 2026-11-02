@@ -228,6 +228,16 @@ class CombatState(GameState):
             y=165,
         )
 
+        # Pemain dan monster berdiri tepat di garis bawah arena
+        # (tepi atas panel status, sama dengan panel_top di render()).
+        ground_y = int(SCREEN_HEIGHT * 0.67) - 2
+        self.player_entity.place_feet_at(ground_y)
+        self.monster_entity.y = float(ground_y - self.monster_entity.height)
+        self.monster_entity.rect.topleft = (
+            int(self.monster_entity.x),
+            int(self.monster_entity.y),
+        )
+
         self.player_hp_bar.set_value(
             state.player.hp, state.player.max_hp
         )
@@ -1364,13 +1374,14 @@ class CombatState(GameState):
             player_text = player_font.render(
                 f"{player.name} ({player.role.value})", True, COLOR_TEXT_WHITE
             )
-            surface.blit(
-                player_text,
-                (int(SCREEN_WIDTH * 0.11), panel_top + int(12 * SCREEN_HEIGHT / 900)),
-            )
+            name_x = int(SCREEN_WIDTH * 0.11)
+            name_y = panel_top + int(12 * SCREEN_HEIGHT / 900)
+            surface.blit(player_text, (name_x, name_y))
 
-            # Chip status efek di samping nama pemain.
-            chip_font = self.assets.get_font(12, bold=True)
+            # Chip status efek di samping kanan nama pemain.
+            chip_font = self.assets.get_font(
+                max(11, int(15 * SCREEN_HEIGHT / 900)), bold=True
+            )
             chips = []
             if player.stunned:
                 chips.append(("STUN (giliran depan)", (150, 225, 255)))
@@ -1388,10 +1399,11 @@ class CombatState(GameState):
                 chips.append(
                     (f"FROST {self.frost_hit_count}/2", (150, 225, 255))
                 )
-            cx = 80 + player_text.get_width() + 14
+            cx = name_x + player_text.get_width() + int(14 * SCREEN_WIDTH / 1600)
             for label, color in chips:
                 chip = chip_font.render(f"[{label}]", True, color)
-                surface.blit(chip, (cx, 472))
+                chip_y = name_y + (player_text.get_height() - chip.get_height()) // 2
+                surface.blit(chip, (cx, chip_y))
                 cx += chip.get_width() + 8
 
         # Entitas.
@@ -1479,4 +1491,3 @@ class CombatState(GameState):
             text_surface = font.render(line, True, COLOR_TEXT_WHITE)
             surface.blit(text_surface, (rect.x + padding_x, y))
             y += line_height
-
